@@ -10,6 +10,8 @@ import {
 
 /** Component IDs that split (load-balance) traffic across children. */
 const LOAD_BALANCING_COMPONENTS = new Set(["load-balancer", "api-gateway"]);
+const CACHE_COMPONENT_ID = "cache";
+const CACHE_HIT_RATE = 0.9;
 
 function getStatus(utilization: number): NodeStatus {
   if (utilization > UTILIZATION_CRITICAL) return "critical";
@@ -137,13 +139,53 @@ export function runSimulation(
     return delivered;
   };
 
+  const distributeTrafficToChildren = (nodeId: string, output: number): Map<string, number> => {
+    const children = adjacency.get(nodeId) ?? [];
+    if (children.length === 0) return new Map();
+
+    const nodeComponentId = nodeMap.get(nodeId)?.data.componentId;
+    const cacheChildren = children.filter((childId) => nodeMap.get(childId)?.data.componentId === CACHE_COMPONENT_ID);
+    const nonCacheChildren = children.filter((childId) => nodeMap.get(childId)?.data.componentId !== CACHE_COMPONENT_ID);
+
+    if (cacheChildren.length > 0 && nonCacheChildren.length > 0) {
+      if (nodeComponentId === CACHE_COMPONENT_ID) {
+        const missTraffic = output * (1 - CACHE_HIT_RATE);
+        const qpsPerMissChild = missTraffic / nonCacheChildren.length;
+        const result = new Map<string, number>();
+        for (const childId of nonCacheChildren) {
+          result.set(childId, (result.get(childId) ?? 0) + qpsPerMissChild);
+        }
+        return result;
+      }
+
+      const cacheTraffic = output * CACHE_HIT_RATE;
+      const missTraffic = output * (1 - CACHE_HIT_RATE);
+      const result = new Map<string, number>();
+      const qpsPerCacheChild = cacheTraffic / Math.max(1, cacheChildren.length);
+      const qpsPerMissChild = missTraffic / Math.max(1, nonCacheChildren.length);
+
+      for (const childId of cacheChildren) {
+        result.set(childId, (result.get(childId) ?? 0) + qpsPerCacheChild);
+      }
+      for (const childId of nonCacheChildren) {
+        result.set(childId, (result.get(childId) ?? 0) + qpsPerMissChild);
+      }
+      return result;
+    }
+
+    const isSplitter = LOAD_BALANCING_COMPONENTS.has(nodeComponentId ?? "");
+    const qpsToChild = isSplitter && children.length > 0 ? output / children.length : output;
+    const result = new Map<string, number>();
+    for (const childId of children) {
+      result.set(childId, qpsToChild);
+    }
+    return result;
+  };
+
   // Push a node's output QPS to its (not yet processed) children.
   const propagateToUnprocessedChildren = (nodeId: string, output: number) => {
-    const children = adjacency.get(nodeId) ?? [];
-    if (children.length === 0) return;
-    const isSplitter = LOAD_BALANCING_COMPONENTS.has(nodeMap.get(nodeId)!.data.componentId);
-    const qpsToChild = isSplitter ? output / children.length : output;
-    for (const childId of children) {
+    const childQPS = distributeTrafficToChildren(nodeId, output);
+    for (const [childId, qpsToChild] of childQPS.entries()) {
       if (processed.has(childId)) continue;
       incomingQPS.set(childId, (incomingQPS.get(childId) ?? 0) + qpsToChild);
     }
@@ -164,10 +206,9 @@ export function runSimulation(
 
     // Propagate to children: load-balancers split traffic, everything else fans out
     const children = adjacency.get(nodeId) ?? [];
-    const isSplitter = LOAD_BALANCING_COMPONENTS.has(nodeMap.get(nodeId)!.data.componentId);
-    const qpsToChild = isSplitter && children.length > 0 ? output / children.length : output;
+    const childQPS = distributeTrafficToChildren(nodeId, output);
 
-    for (const childId of children) {
+    for (const [childId, qpsToChild] of childQPS.entries()) {
       incomingQPS.set(childId, (incomingQPS.get(childId) ?? 0) + qpsToChild);
 
       // Decrement in-degree; enqueue when all predecessors processed
@@ -244,9 +285,8 @@ export function runSimulation(
       const output = processNode(nodeId);
       const children = adjacency.get(nodeId) ?? [];
       if (children.length === 0) return;
-      const isSplitter = LOAD_BALANCING_COMPONENTS.has(nodeMap.get(nodeId)!.data.componentId);
-      const qpsToChild = isSplitter ? output / children.length : output;
-      for (const childId of children) {
+      const childQPS = distributeTrafficToChildren(nodeId, output);
+      for (const [childId, qpsToChild] of childQPS.entries()) {
         if (processed.has(childId)) continue;
         incomingQPS.set(childId, (incomingQPS.get(childId) ?? 0) + qpsToChild);
         if (cycleSet.has(childId)) cycleQueue.push(childId);
