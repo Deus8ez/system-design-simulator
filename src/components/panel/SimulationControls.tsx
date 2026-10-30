@@ -47,11 +47,23 @@ export function SimulationControls({ onSimulate }: SimulationControlsProps) {
 
       <div className="space-y-3">
         <div>
-          <div className="mb-1.5 flex items-center justify-between">
+          <div className="mb-1.5 flex items-center justify-between gap-2">
             <label className="text-xs text-zinc-400">Requests/sec</label>
-            <span className="font-mono text-xs text-cyan-500">
-              {new Intl.NumberFormat("en-US").format(config.requestsPerSec)}
-            </span>
+            <input
+              type="number"
+              min={100}
+              max={500000}
+              step={100}
+              value={config.requestsPerSec}
+              onChange={(e) => {
+                const rawValue = Number(e.target.value);
+                if (!Number.isFinite(rawValue)) return;
+                const clampedValue = Math.min(500000, Math.max(100, Math.round(rawValue)));
+                setConfig({ requestsPerSec: clampedValue });
+              }}
+              className="h-7 w-[120px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-right font-mono text-xs text-cyan-500 outline-none transition-colors focus:border-cyan-500"
+              aria-label="Requests per second"
+            />
           </div>
           <Slider
             value={[config.requestsPerSec]}
