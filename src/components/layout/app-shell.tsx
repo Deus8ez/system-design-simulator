@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import { ReactFlowProvider, type Node } from "@xyflow/react";
 import { X } from "lucide-react";
 import { TopBar } from "./top-bar";
-import { SupportFAB } from "./SupportFAB";
 import { Sidebar } from "@/components/sidebar/Sidebar";
 import { RightPanel } from "@/components/panel/RightPanel";
 import { DesignCanvas } from "@/components/canvas/DesignCanvas";
@@ -390,11 +389,6 @@ export function AppShell() {
             </>
           )}
         </div>
-
-        <SupportFAB
-          onClick={() => setSupportDialogOpen(true)}
-          hidden={mobileSidebarOpen || mobileRightOpen}
-        />
 
         <Toast />
 
