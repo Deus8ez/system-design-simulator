@@ -19,6 +19,7 @@ import { TradeoffLog } from "./TradeoffLog";
 import { TradeoffCards } from "./TradeoffCards";
 import { useInterviewStore } from "@/store/interviewStore";
 import { InterviewPhasePanel } from "@/components/interview/InterviewPhasePanel";
+import { RuntimeModelEditor } from "./RuntimeModelEditor";
 
 interface RightPanelProps {
   open?: boolean;
@@ -217,6 +218,8 @@ function PropertiesTab() {
   const selectedNodeId = useCanvasStore((s) => s.selectedNodeId);
   const selectedEdgeId = useCanvasStore((s) => s.selectedEdgeId);
   const nodes = useCanvasStore((s) => s.nodes);
+  const tabs = useCanvasStore((s) => s.tabs);
+  const activeTabId = useCanvasStore((s) => s.activeTabId);
   const updateNodeData = useCanvasStore((s) => s.updateNodeData);
   const deleteNode = useCanvasStore((s) => s.deleteNode);
   const selectedProblemId = useAppStore((s) => s.selectedProblemId);
@@ -224,6 +227,7 @@ function PropertiesTab() {
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) as
     | (typeof nodes[number] & { data: ComponentNodeData })
     | undefined;
+  const readOnly = tabs.find((tab) => tab.id === activeTabId)?.readOnly === true;
   const problem = getProblemById(selectedProblemId);
 
   return (
@@ -369,6 +373,8 @@ function PropertiesTab() {
                 </div>
               ))}
             </div>
+
+            <RuntimeModelEditor nodeId={selectedNode.id} data={data} disabled={readOnly} />
 
             <Button
               variant="outline"

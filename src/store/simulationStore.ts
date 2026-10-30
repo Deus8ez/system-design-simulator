@@ -21,6 +21,8 @@ const defaultConfig: SimulationConfig = {
   requestsPerSec: 10000,
   durationSec: 10,
   rampUp: true,
+  faults: {},
+  requestProfiles: [{ name: "Default", trafficWeight: 1, attributes: {} }],
 };
 
 export const useSimulationStore = create<SimulationState>((set) => ({

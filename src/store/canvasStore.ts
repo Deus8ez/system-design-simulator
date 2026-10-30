@@ -12,6 +12,7 @@ import {
 } from "@xyflow/react";
 import { useSimulationStore } from "./simulationStore";
 import { safeLocalStorage } from "./safeStorage";
+import type { DatabaseTable, EndpointDefinition, QueueDeliveryMode } from "@/types/component";
 
 export interface ComponentNodeData {
   componentId: string;
@@ -22,6 +23,9 @@ export interface ComponentNodeData {
   maxQPS: number;
   latencyMs: number;
   scalable: boolean;
+  endpoints?: EndpointDefinition[];
+  tables?: DatabaseTable[];
+  queueDeliveryMode?: QueueDeliveryMode;
   utilization?: number;
   status?: string;
   isBottleneck?: boolean;

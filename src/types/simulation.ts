@@ -8,6 +8,10 @@ export interface NodeMetrics {
   latencyMs: number;
   status: NodeStatus;
   isBottleneck: boolean;
+  failedQPS?: number;
+  rejectedQPS?: number;
+  queueDepth?: number;
+  queueBacklogQPS?: number;
 }
 
 export interface SimulationResult {
@@ -15,6 +19,8 @@ export interface SimulationResult {
   totalLatencyMs: number;
   bottleneckNodes: string[];
   throughput: number;
+  failedOperationsPerSec: number;
+  rejectedRequestsPerSec: number;
   timestamp: number;
   warnings: string[];
 }
@@ -23,4 +29,16 @@ export interface SimulationConfig {
   requestsPerSec: number;
   durationSec: number;
   rampUp: boolean;
+  faults: Record<string, ComponentFault>;
+  requestProfiles: RequestProfile[];
 }
+
+export interface RequestProfile {
+  name: string;
+  trafficWeight: number;
+  attributes: Record<string, string | number | boolean>;
+}
+
+export type ComponentFault =
+  | { mode: "down" }
+  | { mode: "degraded"; capacityFactor: number; latencyMultiplier: number };

@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { Hanken_Grotesk, Geist_Mono } from "next/font/google";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
 // One grotesque does both body and display (differentiated by weight + tracking)
@@ -50,9 +49,7 @@ export default function RootLayout({
             __html: `(function(){try{var s=localStorage.getItem('systemsim-app');var t=s&&JSON.parse(s).state&&JSON.parse(s).state.theme;document.documentElement.classList.toggle('dark',t!=='light');}catch(e){}})();`,
           }}
         />
-        <TooltipProvider>
-          {children}
-        </TooltipProvider>
+        {children}
       </body>
     </html>
   );

@@ -8,6 +8,16 @@ import { useSimulationStore } from "./simulationStore";
 import { useCustomProblemsStore } from "./customProblemsStore";
 import { safeLocalStorage } from "./safeStorage";
 import { PROBLEMS } from "@/data/problems";
+import type {
+  DatabaseColumn,
+  DatabaseIndex,
+  DatabaseTable,
+  EndpointDefinition,
+  EndpointLogicKind,
+  EndpointMethod,
+  EndpointLogicStep,
+  QueueDeliveryMode,
+} from "@/types/component";
 
 export interface SerializedComponentData {
   componentId: string;
@@ -18,6 +28,9 @@ export interface SerializedComponentData {
   maxQPS: number;
   latencyMs: number;
   scalable: boolean;
+  endpoints?: EndpointDefinition[];
+  tables?: DatabaseTable[];
+  queueDeliveryMode?: QueueDeliveryMode;
 }
 
 export interface SerializedTextData {
@@ -97,6 +110,13 @@ export function serializeNodes(
         maxQPS: n.data.maxQPS,
         latencyMs: n.data.latencyMs,
         scalable: n.data.scalable,
+        endpoints: Array.isArray(n.data.endpoints)
+          ? (n.data.endpoints as EndpointDefinition[])
+          : undefined,
+        tables: Array.isArray(n.data.tables)
+          ? (n.data.tables as DatabaseTable[])
+          : undefined,
+        queueDeliveryMode: n.data.queueDeliveryMode === "competing" ? "competing" : "broadcast",
       } as SerializedComponentData,
     };
   });
@@ -132,6 +152,98 @@ function str(v: unknown, fallback: string): string {
 
 function num(v: unknown, fallback: number): number {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+const ENDPOINT_METHODS = new Set<EndpointMethod>(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+const ENDPOINT_LOGIC_KINDS = new Set<EndpointLogicKind>([
+  "authenticate",
+  "validate",
+  "cache-read",
+  "database-read",
+  "database-write",
+  "cache-invalidate",
+  "publish-event",
+  "route",
+  "respond",
+]);
+
+function normalizeEndpoints(raw: unknown): EndpointDefinition[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.filter(isRecord).map((endpoint, endpointIndex) => {
+    const rawSteps = Array.isArray(endpoint.steps) ? endpoint.steps : [];
+    const steps: EndpointLogicStep[] = rawSteps.filter(isRecord).flatMap((step, stepIndex) => {
+      if (typeof step.kind !== "string" || !ENDPOINT_LOGIC_KINDS.has(step.kind as EndpointLogicKind)) {
+        return [];
+      }
+      return [{
+        id: str(step.id, `step-${endpointIndex}-${stepIndex}`),
+        kind: step.kind as EndpointLogicKind,
+        targetNodeId: typeof step.targetNodeId === "string" ? step.targetNodeId : undefined,
+        target: typeof step.target === "string" ? step.target : undefined,
+        condition: typeof step.condition === "string" ? step.condition : undefined,
+        cacheHitRate: typeof step.cacheHitRate === "number" && Number.isFinite(step.cacheHitRate)
+          ? Math.min(1, Math.max(0, step.cacheHitRate))
+          : undefined,
+        matchRate: typeof step.matchRate === "number" && Number.isFinite(step.matchRate)
+          ? Math.min(1, Math.max(0, step.matchRate))
+          : undefined,
+        retryAttempts: typeof step.retryAttempts === "number" && Number.isFinite(step.retryAttempts)
+          ? Math.min(5, Math.max(0, Math.floor(step.retryAttempts)))
+          : undefined,
+        retryFailureRate: typeof step.retryFailureRate === "number" && Number.isFinite(step.retryFailureRate)
+          ? Math.min(1, Math.max(0, step.retryFailureRate))
+          : undefined,
+      }];
+    });
+    const method = typeof endpoint.method === "string" && ENDPOINT_METHODS.has(endpoint.method as EndpointMethod)
+      ? endpoint.method as EndpointMethod
+      : "GET";
+    return {
+      id: str(endpoint.id, `endpoint-${endpointIndex}`),
+      method,
+      path: str(endpoint.path, "/"),
+      trafficWeight: typeof endpoint.trafficWeight === "number" && Number.isFinite(endpoint.trafficWeight)
+        ? Math.max(0.01, endpoint.trafficWeight)
+        : 1,
+      steps,
+    };
+  });
+}
+
+function normalizeTables(raw: unknown): DatabaseTable[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.filter(isRecord).map((table, tableIndex) => {
+    const columns: DatabaseColumn[] = (Array.isArray(table.columns) ? table.columns : [])
+      .filter(isRecord)
+      .map((column, columnIndex) => ({
+        id: str(column.id, `column-${tableIndex}-${columnIndex}`),
+        name: str(column.name, `column_${columnIndex + 1}`),
+        dataType: str(column.dataType, "TEXT"),
+        nullable: column.nullable !== false,
+        primaryKey: column.primaryKey === true,
+      }));
+    const columnNames = new Set(columns.map((column) => column.name));
+    const indexes: DatabaseIndex[] = (Array.isArray(table.indexes) ? table.indexes : [])
+      .filter(isRecord)
+      .map((index, indexNumber) => ({
+        id: str(index.id, `index-${tableIndex}-${indexNumber}`),
+        name: str(index.name, `idx_${str(table.name, `table_${tableIndex + 1}`)}_${indexNumber + 1}`),
+        columns: Array.isArray(index.columns)
+          ? index.columns.filter((name): name is string => typeof name === "string" && columnNames.has(name))
+          : [],
+        unique: index.unique === true,
+      }))
+      .filter((index) => index.columns.length > 0);
+    return {
+      id: str(table.id, `table-${tableIndex}`),
+      name: str(table.name, `table_${tableIndex + 1}`),
+      estimatedRows: typeof table.estimatedRows === "number" && Number.isFinite(table.estimatedRows)
+        ? Math.min(1_000_000_000_000, Math.max(1, Math.floor(table.estimatedRows)))
+        : 1000,
+      columns,
+      indexes,
+    };
+  });
 }
 
 /**
@@ -218,6 +330,9 @@ function normalizeImportedDesign(parsed: unknown):
           maxQPS: num(d.maxQPS, 1000),
           latencyMs: num(d.latencyMs, 10),
           scalable: d.scalable !== false,
+          endpoints: normalizeEndpoints(d.endpoints),
+          tables: normalizeTables(d.tables),
+          queueDeliveryMode: d.queueDeliveryMode === "competing" ? "competing" : "broadcast",
         },
       });
     }

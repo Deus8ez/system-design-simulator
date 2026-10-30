@@ -2,7 +2,7 @@
 
 import { useSimulationStore } from "@/store/simulationStore";
 import { useCanvasStore } from "@/store/canvasStore";
-import { Activity } from "lucide-react";
+import { Activity, AlertTriangle } from "lucide-react";
 
 const STATUS_COLOR: Record<string, string> = {
   healthy: "bg-emerald-500",
@@ -63,6 +63,21 @@ export function MetricsDisplay() {
           </p>
           <p className="mt-1 text-[10px] text-zinc-500">longest path</p>
         </div>
+        <div className="rounded-lg bg-zinc-800/70 px-3 py-2.5">
+          <p className="metric-label text-[10px]">Failed operations</p>
+          <p className="metric-value mt-1 font-mono text-2xl font-semibold leading-none text-rose-300">
+            {abbrev(result.failedOperationsPerSec)}
+            <span className="ml-1 align-baseline text-xs font-normal text-zinc-500">ops/s</span>
+          </p>
+          <p className="mt-1 text-[10px] text-zinc-500">after retries / capacity rejection</p>
+        </div>
+        <div className="rounded-lg bg-zinc-800/70 px-3 py-2.5">
+          <p className="metric-label text-[10px]">Validation rejects</p>
+          <p className="metric-value mt-1 font-mono text-2xl font-semibold leading-none text-amber-300">
+            {abbrev(result.rejectedRequestsPerSec)}
+            <span className="ml-1 align-baseline text-xs font-normal text-zinc-500">req/s</span>
+          </p>
+        </div>
       </div>
 
       {result.bottleneckNodes.length > 0 && (
@@ -70,6 +85,17 @@ export function MetricsDisplay() {
           <p className="text-xs font-medium text-rose-400">
             {result.bottleneckNodes.length} Bottleneck{result.bottleneckNodes.length > 1 ? "s" : ""} Detected
           </p>
+        </div>
+      )}
+
+      {result.warnings.length > 0 && (
+        <div className="space-y-1 rounded-md border border-amber-500/20 bg-amber-950/20 px-2.5 py-2">
+          {result.warnings.map((warning, index) => (
+            <p key={`${index}-${warning}`} className="flex items-start gap-1.5 text-[11px] leading-relaxed text-amber-300">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>{warning}</span>
+            </p>
+          ))}
         </div>
       )}
 
@@ -101,7 +127,7 @@ export function MetricsDisplay() {
                     </span>
                   )}
                 </div>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-4 gap-2">
                   <div>
                     <p className="metric-label text-[9px]">QPS</p>
                     <p className="font-mono text-xs tabular-nums text-zinc-200">
@@ -134,7 +160,27 @@ export function MetricsDisplay() {
                       {m.latencyMs.toFixed(0)}ms
                     </p>
                   </div>
+                  <div>
+                    <p className="metric-label text-[9px]">Failed ops/s</p>
+                    <p className={`font-mono text-xs tabular-nums ${(m.failedQPS ?? 0) > 0 ? "text-rose-300" : "text-zinc-200"}`}>
+                      {abbrev(m.failedQPS ?? 0)}
+                    </p>
+                  </div>
                 </div>
+                {(m.rejectedQPS ?? 0) > 0 && (
+                  <p className="mt-1 text-[10px] text-amber-300">
+                    {abbrev(m.rejectedQPS ?? 0)} requests/sec rejected by validation
+                  </p>
+                )}
+                {m.queueDepth !== undefined && (
+                  <div className="mt-2 flex items-center justify-between border-t border-zinc-700 pt-1.5 text-[10px]">
+                    <span className="text-zinc-500">Projected queue depth</span>
+                    <span className={`font-mono ${m.queueBacklogQPS && m.queueBacklogQPS > 0 ? "text-amber-300" : "text-zinc-300"}`}>
+                      {abbrev(m.queueDepth)} messages
+                      {m.queueBacklogQPS !== undefined && ` · +${abbrev(m.queueBacklogQPS)}/s`}
+                    </span>
+                  </div>
+                )}
               </div>
             );
           })}
