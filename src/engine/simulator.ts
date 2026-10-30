@@ -14,13 +14,13 @@ const CACHE_COMPONENT_ID = "cache";
 const CACHE_HIT_RATE = 0.9;
 
 function getStatus(utilization: number): NodeStatus {
-  if (utilization > UTILIZATION_CRITICAL) return "critical";
-  if (utilization > UTILIZATION_WARNING) return "warning";
+  if (utilization >= UTILIZATION_CRITICAL) return "critical";
+  if (utilization >= UTILIZATION_WARNING) return "warning";
   return "healthy";
 }
 
 function computeLatency(baseLatency: number, utilization: number): number {
-  if (utilization > LATENCY_SPIKE_THRESHOLD) {
+  if (utilization >= LATENCY_SPIKE_THRESHOLD) {
     return baseLatency * (1 + Math.max(0, utilization - LATENCY_SPIKE_THRESHOLD) * LATENCY_SPIKE_MULTIPLIER);
   }
   return baseLatency;
@@ -421,6 +421,61 @@ function computeAggregateThroughput(
   return Math.min(requestsPerSec, aggregateThroughput);
 }
 
+function findStronglyConnectedComponents(
+  reachable: Set<string>,
+  adjacency: Map<string, string[]>
+): Map<string, number> {
+  const index = new Map<string, number>();
+  const lowLink = new Map<string, number>();
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  const componentIds = new Map<string, number>();
+  let nextIndex = 0;
+  let nextComponentId = 0;
+
+  const visit = (nodeId: string) => {
+    index.set(nodeId, nextIndex);
+    lowLink.set(nodeId, nextIndex);
+    nextIndex += 1;
+    stack.push(nodeId);
+    onStack.add(nodeId);
+
+    for (const childId of adjacency.get(nodeId) ?? []) {
+      if (!reachable.has(childId)) continue;
+      if (!index.has(childId)) {
+        visit(childId);
+        lowLink.set(
+          nodeId,
+          Math.min(lowLink.get(nodeId) ?? nextIndex, lowLink.get(childId) ?? nextIndex)
+        );
+      } else if (onStack.has(childId)) {
+        lowLink.set(
+          nodeId,
+          Math.min(lowLink.get(nodeId) ?? nextIndex, index.get(childId) ?? nextIndex)
+        );
+      }
+    }
+
+    if ((lowLink.get(nodeId) ?? nextIndex) === (index.get(nodeId) ?? nextIndex)) {
+      let current: string | undefined;
+      do {
+        current = stack.pop();
+        if (current) {
+          onStack.delete(current);
+          componentIds.set(current, nextComponentId);
+        }
+      } while (current !== nodeId);
+      nextComponentId += 1;
+    }
+  };
+
+  for (const nodeId of [...reachable]) {
+    if (!index.has(nodeId)) visit(nodeId);
+  }
+
+  return componentIds;
+}
+
 function computeLongestPathLatency(
   entryIds: string[],
   syncAdjacency: Map<string, string[]>,
@@ -428,7 +483,6 @@ function computeLongestPathLatency(
 ): number {
   if (entryIds.length === 0) return 0;
 
-  // BFS reachable set from entries over sync edges
   const reachable = new Set<string>(entryIds);
   const bfs: string[] = [...entryIds];
   let bfsHead = 0;
@@ -442,44 +496,68 @@ function computeLongestPathLatency(
     }
   }
 
-  // In-degree restricted to the reachable subgraph (edges from unreachable
-  // nodes must not block Kahn's ordering)
-  const inDeg = new Map<string, number>();
-  for (const id of reachable) inDeg.set(id, 0);
-  for (const id of reachable) {
-    for (const child of syncAdjacency.get(id) ?? []) {
-      if (reachable.has(child)) {
-        inDeg.set(child, (inDeg.get(child) ?? 0) + 1);
+  const componentIds = findStronglyConnectedComponents(reachable, syncAdjacency);
+  const componentWeight = new Map<number, number>();
+  for (const [nodeId, componentId] of componentIds.entries()) {
+    const nodeLatency = metrics.get(nodeId)?.latencyMs ?? 0;
+    componentWeight.set(
+      componentId,
+      Math.max(componentWeight.get(componentId) ?? 0, nodeLatency)
+    );
+  }
+
+  const componentAdjacency = new Map<number, number[]>();
+  const componentInDegree = new Map<number, number>();
+  const componentSet = new Set(componentIds.values());
+  for (const componentId of componentSet) {
+    componentAdjacency.set(componentId, []);
+    componentInDegree.set(componentId, 0);
+  }
+
+  for (const nodeId of reachable) {
+    const fromComponent = componentIds.get(nodeId);
+    if (fromComponent === undefined) continue;
+    for (const childId of syncAdjacency.get(nodeId) ?? []) {
+      if (!reachable.has(childId)) continue;
+      const toComponent = componentIds.get(childId);
+      if (toComponent === undefined || toComponent === fromComponent) continue;
+      const nextEdges = componentAdjacency.get(fromComponent) ?? [];
+      if (!nextEdges.includes(toComponent)) {
+        nextEdges.push(toComponent);
+        componentAdjacency.set(fromComponent, nextEdges);
+        componentInDegree.set(toComponent, (componentInDegree.get(toComponent) ?? 0) + 1);
       }
     }
   }
 
-  const dist = new Map<string, number>();
-  const queue: string[] = [];
-  for (const id of entryIds) {
-    queue.push(id);
-    dist.set(id, metrics.get(id)?.latencyMs ?? 0);
+  const dist = new Map<number, number>();
+  const queue: number[] = [];
+  for (const entryId of entryIds) {
+    const startComponent = componentIds.get(entryId);
+    if (startComponent === undefined) continue;
+    const startDistance = componentWeight.get(startComponent) ?? 0;
+    dist.set(startComponent, Math.max(dist.get(startComponent) ?? 0, startDistance));
+    queue.push(startComponent);
   }
 
-  const done = new Set<string>();
+  const processed = new Set<number>();
   let head = 0;
   while (head < queue.length) {
-    const id = queue[head++];
-    if (done.has(id)) continue;
-    done.add(id);
+    const componentId = queue[head++];
+    if (processed.has(componentId)) continue;
+    processed.add(componentId);
 
-    const currentDist = dist.get(id) ?? 0;
-    for (const childId of syncAdjacency.get(id) ?? []) {
-      if (!reachable.has(childId)) continue;
-      const childLatency = metrics.get(childId)?.latencyMs ?? 0;
-      const newDist = currentDist + childLatency;
-      if (newDist > (dist.get(childId) ?? 0)) {
-        dist.set(childId, newDist);
+    const currentDist = dist.get(componentId) ?? 0;
+    for (const nextComponent of componentAdjacency.get(componentId) ?? []) {
+      const candidate = currentDist + (componentWeight.get(nextComponent) ?? 0);
+      if (candidate > (dist.get(nextComponent) ?? 0)) {
+        dist.set(nextComponent, candidate);
       }
-      const newDeg = (inDeg.get(childId) ?? 1) - 1;
-      inDeg.set(childId, newDeg);
-      if (newDeg === 0) {
-        queue.push(childId);
+
+      const nextInDegree = (componentInDegree.get(nextComponent) ?? 1) - 1;
+      componentInDegree.set(nextComponent, nextInDegree);
+      if (nextInDegree === 0) {
+        queue.push(nextComponent);
       }
     }
   }
