@@ -357,18 +357,15 @@ export function runSimulation(
     nodeMetrics
   );
 
-  // Throughput can never exceed offered load. With no entry point, nothing flows.
-  // At a bottleneck, what actually gets through is min(incoming, capacity).
+  // Throughput is the aggregate accepted load at the leaves of the reachable
+  // request graph. Taking a single min() across bottleneck nodes breaks fan-out
+  // topologies, where different branches can each be constrained independently
+  // while the total system throughput is still the sum of those branch outputs.
   let throughput: number;
   if (nodes.length === 0 || entryNodes.length === 0) {
     throughput = 0;
-  } else if (bottleneckNodes.length > 0) {
-    throughput = Math.min(
-      requestsPerSec,
-      ...bottleneckNodes.map((id) => deliveredQPS.get(id) ?? 0)
-    );
   } else {
-    throughput = requestsPerSec;
+    throughput = computeAggregateThroughput(entryNodes.map((n) => n.id), adjacency, deliveredQPS, requestsPerSec);
   }
 
   return {
@@ -386,6 +383,44 @@ export function runSimulation(
  * simulation's entry nodes. Nodes only reachable via async edges don't
  * contribute — async work isn't on the user-facing request path.
  */
+function computeAggregateThroughput(
+  entryIds: string[],
+  adjacency: Map<string, string[]>,
+  deliveredQPS: Map<string, number>,
+  requestsPerSec: number
+): number {
+  if (entryIds.length === 0) return 0;
+
+  const reachable = new Set<string>(entryIds);
+  const queue: string[] = [...entryIds];
+  let head = 0;
+
+  while (head < queue.length) {
+    const id = queue[head++];
+    for (const childId of adjacency.get(id) ?? []) {
+      if (!reachable.has(childId)) {
+        reachable.add(childId);
+        queue.push(childId);
+      }
+    }
+  }
+
+  const leafIds = [...reachable].filter((id) => (adjacency.get(id) ?? []).length === 0);
+  if (leafIds.length > 0) {
+    const leafThroughput = leafIds.reduce(
+      (sum, id) => sum + (deliveredQPS.get(id) ?? 0),
+      0
+    );
+    return Math.min(requestsPerSec, leafThroughput);
+  }
+
+  const aggregateThroughput = [...reachable].reduce(
+    (sum, id) => sum + (deliveredQPS.get(id) ?? 0),
+    0
+  );
+  return Math.min(requestsPerSec, aggregateThroughput);
+}
+
 function computeLongestPathLatency(
   entryIds: string[],
   syncAdjacency: Map<string, string[]>,
