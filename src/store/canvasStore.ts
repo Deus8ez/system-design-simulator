@@ -12,7 +12,7 @@ import {
 } from "@xyflow/react";
 import { useSimulationStore } from "./simulationStore";
 import { safeLocalStorage } from "./safeStorage";
-import type { DatabaseTable, EndpointDefinition, QueueDeliveryMode } from "@/types/component";
+import type { CacheConfiguration, DatabaseTable, EndpointDefinition, GatewayRouteDefinition, QueueConfiguration, QueueDeliveryMode, RateLimiterConfiguration } from "@/types/component";
 
 export interface ComponentNodeData {
   componentId: string;
@@ -24,8 +24,12 @@ export interface ComponentNodeData {
   latencyMs: number;
   scalable: boolean;
   endpoints?: EndpointDefinition[];
+  routes?: GatewayRouteDefinition[];
+  cacheConfig?: CacheConfiguration;
   tables?: DatabaseTable[];
+  queueConfig?: QueueConfiguration;
   queueDeliveryMode?: QueueDeliveryMode;
+  rateLimiterConfig?: RateLimiterConfiguration;
   utilization?: number;
   status?: string;
   isBottleneck?: boolean;
@@ -52,6 +56,8 @@ export interface CanvasTab {
   nodes: Node[];
   edges: Edge[];
   readOnly?: boolean;
+  /** True when a read-only reference is illustrative but fails design compilation. */
+  designOnly?: boolean;
 }
 
 interface HistoryEntry {
@@ -419,11 +425,13 @@ export const useCanvasStore = create<CanvasState>()(
         // The active tab's content already lives in the top-level
         // nodes/edges — persist it emptied to avoid duplicating it, and
         // reconstruct it in `merge` on rehydrate.
-        tabs: state.tabs.map((t) =>
-          t.id === state.activeTabId
-            ? { ...t, nodes: [], edges: [] }
-            : { ...t, nodes: stripRuntimeFields(t.nodes) }
-        ),
+        tabs: state.tabs.map((t) => {
+          const persistedTab = { ...t };
+          delete persistedTab.designOnly;
+          return t.id === state.activeTabId
+            ? { ...persistedTab, nodes: [], edges: [] }
+            : { ...persistedTab, nodes: stripRuntimeFields(t.nodes) };
+        }),
         activeTabId: state.activeTabId,
       }),
       merge: (persistedState, currentState) => {

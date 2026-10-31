@@ -37,6 +37,8 @@ export interface RequestProfile {
   name: string;
   trafficWeight: number;
   attributes: Record<string, string | number | boolean>;
+  /** Optional fraction of cache reads served from cache, from 0 to 1. */
+  cacheHitRate?: number;
 }
 
 export type ComponentFault =

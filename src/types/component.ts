@@ -18,6 +18,15 @@ export interface SystemComponent {
 }
 
 export type EndpointMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+export type EndpointFieldType = "string" | "number" | "boolean";
+export type RequestFieldLocation = "path" | "query" | "body";
+
+export interface EndpointFieldDefinition {
+  id: string;
+  name: string;
+  type: EndpointFieldType;
+  location?: RequestFieldLocation;
+}
 
 export type EndpointLogicKind =
   | "authenticate"
@@ -54,7 +63,68 @@ export interface EndpointDefinition {
   path: string;
   /** Relative request volume; endpoint weights are normalized per app server. */
   trafficWeight?: number;
+  /** Optional typed contract; when omitted, legacy endpoints remain untyped. */
+  requestFields?: EndpointFieldDefinition[];
+  responseFields?: EndpointFieldDefinition[];
   steps: EndpointLogicStep[];
+}
+
+/** Exact HTTP method/path mapping from an API Gateway to a service endpoint. */
+export interface GatewayRouteDefinition {
+  id: string;
+  method: EndpointMethod;
+  path: string;
+  /** Connected App Server node that owns the matching endpoint. */
+  backendNodeId?: string;
+  /** Relative share for selecting among distinct backend services. */
+  trafficWeight?: number;
+}
+
+export type CacheEvictionPolicy =
+  | "noeviction"
+  | "allkeys-lru"
+  | "allkeys-lfu"
+  | "volatile-lru"
+  | "volatile-ttl";
+
+/** Redis settings currently validated/documented but not used in estimates. */
+export interface CacheConfiguration {
+  maxMemoryMB?: number;
+  defaultTtlSeconds?: number;
+  evictionPolicy?: CacheEvictionPolicy;
+}
+
+export type RateLimitAlgorithm = "token-bucket" | "sliding-window";
+export type RateLimitKey = "global" | "client-id" | "ip" | "api-key";
+
+/** Aggregate sustained-rate estimate for a limiter; burst timing is not simulated. */
+export interface RateLimiterConfiguration {
+  algorithm?: RateLimitAlgorithm;
+  keyBy?: RateLimitKey;
+  requestsPerWindow?: number;
+  windowSeconds?: number;
+  /** Estimated concurrent keys used to scale a per-key quota into aggregate QPS. */
+  estimatedDistinctKeys?: number;
+  /** Token capacity metadata; single-load simulations do not model transient bursts. */
+  burstCapacity?: number;
+}
+
+export interface QueueTopicDefinition {
+  id: string;
+  name: string;
+  retentionHours?: number;
+}
+
+export interface QueueConsumerSubscription {
+  id: string;
+  consumerNodeId: string;
+  topicName: string;
+}
+
+export interface QueueConfiguration {
+  topics: QueueTopicDefinition[];
+  /** Optional explicit topic-to-consumer contracts; absent on legacy designs. */
+  subscriptions?: QueueConsumerSubscription[];
 }
 
 export interface DatabaseColumn {

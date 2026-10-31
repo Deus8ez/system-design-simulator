@@ -20,6 +20,7 @@ import { TradeoffCards } from "./TradeoffCards";
 import { useInterviewStore } from "@/store/interviewStore";
 import { InterviewPhasePanel } from "@/components/interview/InterviewPhasePanel";
 import { RuntimeModelEditor } from "./RuntimeModelEditor";
+import { ValidationPanel } from "./ValidationPanel";
 
 interface RightPanelProps {
   open?: boolean;
@@ -54,6 +55,7 @@ function RightTabs({ onSimulate }: { onSimulate: () => void }) {
       <TabsContent value="simulation" className="mt-0 flex-1 overflow-hidden min-h-0">
         <ScrollArea className="h-full">
           <div className="p-3 space-y-4">
+            <ValidationPanel />
             <SimulationControls onSimulate={onSimulate} />
             <Separator className="bg-zinc-800" />
             <MetricsDisplay />

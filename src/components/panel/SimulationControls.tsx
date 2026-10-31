@@ -32,10 +32,15 @@ function parseRequestProfiles(raw: string): RequestProfile[] | null {
       }
       const trafficWeight = profile.trafficWeight;
       if (typeof trafficWeight !== "number" || !Number.isFinite(trafficWeight) || trafficWeight < 0) return null;
+      const cacheHitRate = profile.cacheHitRate;
+      if (cacheHitRate !== undefined && (
+        typeof cacheHitRate !== "number" || !Number.isFinite(cacheHitRate) || cacheHitRate < 0 || cacheHitRate > 1
+      )) return null;
       profiles.push({
         name: typeof profile.name === "string" && profile.name.trim() ? profile.name : `Profile ${index + 1}`,
         trafficWeight,
         attributes: Object.fromEntries(entries) as Record<string, string | number | boolean>,
+        ...(cacheHitRate === undefined ? {} : { cacheHitRate }),
       });
     }
     if (profiles.every((profile) => profile.trafficWeight === 0)) {
@@ -155,7 +160,7 @@ export function SimulationControls({ onSimulate }: SimulationControlsProps) {
         </summary>
         <div className="space-y-2 border-t border-zinc-800 p-2.5">
           <p className="text-[11px] leading-relaxed text-zinc-500">
-            Define profiles with relative traffic weights and attributes. Conditions support comparisons, <span className="font-mono text-zinc-400">!</span>, <span className="font-mono text-zinc-400">&&</span>, <span className="font-mono text-zinc-400">||</span>, and parentheses; for example <span className="font-mono text-zinc-400">(region == &apos;eu&apos; || region == &apos;us&apos;) &amp;&amp; age &gt;= 18</span>.
+            Define profiles with relative traffic weights and attributes. Optional <span className="font-mono text-zinc-400">cacheHitRate</span> (0–1) overrides the cache-read step for that cohort; omitted values use the step setting. Conditions support comparisons, <span className="font-mono text-zinc-400">!</span>, <span className="font-mono text-zinc-400">&&</span>, <span className="font-mono text-zinc-400">||</span>, and parentheses; for example <span className="font-mono text-zinc-400">(region == &apos;eu&apos; || region == &apos;us&apos;) &amp;&amp; age &gt;= 18</span>.
           </p>
           <textarea
             aria-label="Weighted request profiles JSON"
@@ -171,7 +176,7 @@ export function SimulationControls({ onSimulate }: SimulationControlsProps) {
             spellCheck={false}
             className="w-full resize-y rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 font-mono text-[11px] text-zinc-200 outline-none focus:border-cyan-600"
           />
-          {profilesError && <p className="text-[10px] text-rose-400">Enter a non-empty profile array with non-negative weights and primitive attributes; at least one weight must be positive.</p>}
+          {profilesError && <p className="text-[10px] text-rose-400">Enter a non-empty profile array with non-negative weights, primitive attributes, and optional cacheHitRate values from 0 to 1; at least one weight must be positive.</p>}
         </div>
       </details>
 

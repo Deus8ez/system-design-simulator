@@ -4,12 +4,21 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { useCanvasStore, type ComponentNodeData } from "@/store/canvasStore";
 import type {
+  CacheConfiguration,
   DatabaseColumn,
   DatabaseIndex,
   DatabaseTable,
   EndpointDefinition,
+  EndpointFieldDefinition,
   EndpointLogicKind,
   EndpointMethod,
+  GatewayRouteDefinition,
+  QueueConsumerSubscription,
+  QueueConfiguration,
+  QueueTopicDefinition,
+  RateLimitAlgorithm,
+  RateLimitKey,
+  RateLimiterConfiguration,
 } from "@/types/component";
 
 const METHODS: EndpointMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
@@ -57,6 +66,86 @@ function updateEndpoint(
   return endpoints.map((endpoint) => endpoint.id === endpointId ? change(endpoint) : endpoint);
 }
 
+function EndpointFieldsEditor({
+  title,
+  fields,
+  request = false,
+  disabled,
+  onChange,
+}: {
+  title: string;
+  fields: EndpointFieldDefinition[];
+  request?: boolean;
+  disabled: boolean;
+  onChange: (fields: EndpointFieldDefinition[]) => void;
+}) {
+  return (
+    <div className="space-y-1.5 rounded border border-zinc-700/70 bg-zinc-950/40 p-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-medium text-zinc-400">{title}</span>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange([...fields, {
+            id: id("field"),
+            name: "",
+            type: "string",
+            ...(request ? { location: "body" as const } : {}),
+          }])}
+          className="inline-flex items-center gap-1 text-[10px] text-cyan-400 disabled:opacity-50"
+        ><Plus className="h-3 w-3" /> Add field</button>
+      </div>
+      {fields.map((field, index) => (
+        <div key={field.id} className={`grid ${request ? "grid-cols-[minmax(0,1fr)_70px_72px_auto]" : "grid-cols-[minmax(0,1fr)_72px_auto]"} gap-1`}>
+          <input
+            aria-label={`${title} field ${index + 1} name`}
+            disabled={disabled}
+            value={field.name}
+            onChange={(event) => onChange(fields.map((item) => item.id === field.id ? { ...item, name: event.target.value } : item))}
+            placeholder="fieldName"
+            className={inputClass(disabled)}
+          />
+          <select
+            aria-label={`${title} field ${index + 1} type`}
+            disabled={disabled}
+            value={field.type}
+            onChange={(event) => onChange(fields.map((item) => item.id === field.id
+              ? { ...item, type: event.target.value as EndpointFieldDefinition["type"] }
+              : item))}
+            className={inputClass(disabled)}
+          >
+            <option value="string">string</option>
+            <option value="number">number</option>
+            <option value="boolean">boolean</option>
+          </select>
+          {request && (
+            <select
+              aria-label={`Request field ${index + 1} location`}
+              disabled={disabled}
+              value={field.location ?? "body"}
+              onChange={(event) => onChange(fields.map((item) => item.id === field.id
+                ? { ...item, location: event.target.value as EndpointFieldDefinition["location"] }
+                : item))}
+              className={inputClass(disabled)}
+            >
+              <option value="path">path</option>
+              <option value="query">query</option>
+              <option value="body">body</option>
+            </select>
+          )}
+          <button
+            type="button"
+            disabled={disabled}
+            aria-label={`Remove ${title.toLowerCase()} field`}
+            onClick={() => onChange(fields.filter((item) => item.id !== field.id))}
+            className="rounded p-1.5 text-zinc-500 hover:bg-zinc-700 hover:text-rose-400 disabled:opacity-50"
+          ><Trash2 className="h-3 w-3" /></button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function RuntimeModelEditor({
   nodeId,
   data,
@@ -76,7 +165,235 @@ export function RuntimeModelEditor({
   const downstreamTargets = nodes.filter((node) => downstreamIds.has(node.id) && node.type !== "text");
 
   const saveEndpoints = (next: EndpointDefinition[]) => updateNodeData(nodeId, { endpoints: next });
+  const saveRoutes = (next: GatewayRouteDefinition[]) => updateNodeData(nodeId, { routes: next });
+  const cacheConfig = (data.cacheConfig ?? {}) as CacheConfiguration;
+  const saveCacheConfig = (next: CacheConfiguration) => updateNodeData(nodeId, { cacheConfig: next });
+  const queueConfig = (data.queueConfig ?? { topics: [] }) as QueueConfiguration;
+  const subscriptions = Array.isArray(queueConfig.subscriptions) ? queueConfig.subscriptions : [];
+  const saveQueueConfig = (next: QueueConfiguration) => updateNodeData(nodeId, { queueConfig: next });
   const saveTables = (next: DatabaseTable[]) => updateNodeData(nodeId, { tables: next });
+
+  if (data.componentId === "rate-limiter") {
+    const config = data.rateLimiterConfig as RateLimiterConfiguration | undefined;
+    const saveConfig = (next: RateLimiterConfiguration) => updateNodeData(nodeId, { rateLimiterConfig: next });
+    const configureDefaults = () => saveConfig({
+      algorithm: "token-bucket",
+      keyBy: "global",
+      requestsPerWindow: 50_000,
+      windowSeconds: 1,
+      estimatedDistinctKeys: 1,
+      burstCapacity: 10_000,
+    });
+
+    return (
+      <section className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
+        <div>
+          <h3 className="text-xs font-semibold text-zinc-200">Rate limit policy</h3>
+          <p className="mt-0.5 text-[11px] text-zinc-500">Configure a sustained request quota and the key used to group traffic.</p>
+        </div>
+        {!config ? (
+          <div className="space-y-2 rounded bg-zinc-800/70 p-2">
+            <p className="text-[11px] text-zinc-400">No policy configured. Until one is applied, this component uses its ordinary QPS capacity only.</p>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={configureDefaults}
+              className="rounded border border-zinc-700 px-2 py-1 text-[11px] text-cyan-400 hover:bg-zinc-800 disabled:opacity-50"
+            >Configure defaults</button>
+          </div>
+        ) : (
+          <>
+            <label className="block space-y-1 text-[11px] text-zinc-400">
+              Algorithm
+              <select
+                aria-label="Rate limiter algorithm"
+                disabled={disabled}
+                value={config.algorithm ?? ""}
+                onChange={(event) => saveConfig({ ...config, algorithm: event.target.value as RateLimitAlgorithm })}
+                className={`${inputClass(disabled)} w-full`}
+              >
+                <option value="">Select an algorithm</option>
+                <option value="token-bucket">Token bucket</option>
+                <option value="sliding-window">Sliding window counter</option>
+              </select>
+            </label>
+            <label className="block space-y-1 text-[11px] text-zinc-400">
+              Limit key
+              <select
+                aria-label="Rate limiter key"
+                disabled={disabled}
+                value={config.keyBy ?? ""}
+                onChange={(event) => saveConfig({ ...config, keyBy: event.target.value as RateLimitKey })}
+                className={`${inputClass(disabled)} w-full`}
+              >
+                <option value="">Select a key</option>
+                <option value="global">Global</option>
+                <option value="client-id">Client ID</option>
+                <option value="ip">IP address</option>
+                <option value="api-key">API key</option>
+              </select>
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block space-y-1 text-[11px] text-zinc-400">
+                Requests per window
+                <input
+                  aria-label="Rate limit requests per window"
+                  type="number"
+                  min="1"
+                  step="1"
+                  disabled={disabled}
+                  value={config.requestsPerWindow ?? ""}
+                  onChange={(event) => saveConfig({ ...config, requestsPerWindow: event.target.value === "" ? undefined : Number(event.target.value) })}
+                  className={`${inputClass(disabled)} w-full`}
+                />
+              </label>
+              <label className="block space-y-1 text-[11px] text-zinc-400">
+                Window (seconds)
+                <input
+                  aria-label="Rate limit window seconds"
+                  type="number"
+                  min="0.01"
+                  step="1"
+                  disabled={disabled}
+                  value={config.windowSeconds ?? ""}
+                  onChange={(event) => saveConfig({ ...config, windowSeconds: event.target.value === "" ? undefined : Number(event.target.value) })}
+                  className={`${inputClass(disabled)} w-full`}
+                />
+              </label>
+            </div>
+            {config.keyBy !== "global" && (
+              <label className="block space-y-1 text-[11px] text-zinc-400">
+                Estimated distinct keys
+                <input
+                  aria-label="Rate limit estimated distinct keys"
+                  type="number"
+                  min="1"
+                  step="1"
+                  disabled={disabled}
+                  value={config.estimatedDistinctKeys ?? ""}
+                  onChange={(event) => saveConfig({ ...config, estimatedDistinctKeys: event.target.value === "" ? undefined : Number(event.target.value) })}
+                  className={`${inputClass(disabled)} w-full`}
+                />
+              </label>
+            )}
+            {config.algorithm === "token-bucket" && (
+              <label className="block space-y-1 text-[11px] text-zinc-400">
+                Burst capacity (tokens)
+                <input
+                  aria-label="Rate limiter burst capacity"
+                  type="number"
+                  min="1"
+                  step="1"
+                  disabled={disabled}
+                  value={config.burstCapacity ?? ""}
+                  onChange={(event) => saveConfig({ ...config, burstCapacity: event.target.value === "" ? undefined : Number(event.target.value) })}
+                  className={`${inputClass(disabled)} w-full`}
+                />
+              </label>
+            )}
+            <p className="rounded bg-zinc-800/70 p-2 text-[10px] leading-relaxed text-zinc-400">
+              Simulation applies the sustained aggregate quota ({config.keyBy === "global" ? "one global key" : "per-key quota × estimated distinct keys"}). It does not model token refill timing, window boundaries, distributed counter consistency, or transient bursts.
+            </p>
+          </>
+        )}
+      </section>
+    );
+  }
+
+  if (data.componentId === "api-gateway") {
+    const routes = (data.routes ?? []) as GatewayRouteDefinition[];
+    const backends = downstreamTargets.filter((node) => {
+      const targetData = node.data as ComponentNodeData;
+      return targetData.componentId === "app-server";
+    });
+
+    return (
+      <section className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h3 className="text-xs font-semibold text-zinc-200">Gateway routes</h3>
+            <p className="mt-0.5 text-[11px] text-zinc-500">Exact method + path mapping to a connected App Server endpoint.</p>
+          </div>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => saveRoutes([...routes, { id: id("gateway-route"), method: "GET", path: "/new" }])}
+            className="inline-flex shrink-0 items-center gap-1 rounded border border-zinc-700 px-2 py-1 text-[11px] text-cyan-400 hover:bg-zinc-800 disabled:opacity-50"
+          ><Plus className="h-3 w-3" /> Add route</button>
+        </div>
+
+        {routes.length === 0 && (
+          <p className="rounded bg-zinc-800/70 p-2 text-[11px] text-zinc-500">No routes configured. Add a route for each App Server endpoint exposed through this gateway.</p>
+        )}
+
+        {routes.map((route, routeIndex) => (
+          <div key={route.id} className="space-y-2 rounded-md border border-zinc-700/80 bg-zinc-800/50 p-2">
+            <div className="flex gap-1.5">
+              <select
+                aria-label={`Gateway route ${routeIndex + 1} method`}
+                disabled={disabled}
+                value={route.method}
+                onChange={(event) => saveRoutes(routes.map((item) => item.id === route.id
+                  ? { ...item, method: event.target.value as EndpointMethod }
+                  : item))}
+                className={`${inputClass(disabled)} w-[82px] shrink-0`}
+              >
+                {METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
+              </select>
+              <input
+                aria-label={`Gateway route ${routeIndex + 1} path`}
+                disabled={disabled}
+                value={route.path}
+                onChange={(event) => saveRoutes(routes.map((item) => item.id === route.id
+                  ? { ...item, path: event.target.value }
+                  : item))}
+                placeholder="/urls or /:code"
+                className={`${inputClass(disabled)} min-w-0 flex-1`}
+              />
+              <button
+                type="button"
+                disabled={disabled}
+                aria-label="Remove gateway route"
+                onClick={() => saveRoutes(routes.filter((item) => item.id !== route.id))}
+                className="rounded p-1.5 text-zinc-500 hover:bg-zinc-700 hover:text-rose-400 disabled:opacity-50"
+              ><Trash2 className="h-3.5 w-3.5" /></button>
+            </div>
+            <select
+              aria-label={`Gateway route ${routeIndex + 1} backend`}
+              disabled={disabled || backends.length === 0}
+              value={route.backendNodeId ?? ""}
+              onChange={(event) => saveRoutes(routes.map((item) => item.id === route.id
+                ? { ...item, backendNodeId: event.target.value || undefined }
+                : item))}
+              className={`${inputClass(disabled)} w-full`}
+            >
+              <option value="">Choose connected App Server</option>
+              {backends.map((backend) => {
+                const backendData = backend.data as ComponentNodeData;
+                return <option key={backend.id} value={backend.id}>{backendData.label} · {backend.id.slice(0, 8)}</option>;
+              })}
+            </select>
+            <label className="flex items-center justify-between gap-2 text-[10px] text-zinc-400">
+              Relative traffic share
+              <input
+                aria-label={`Gateway route ${routeIndex + 1} traffic share`}
+                type="number"
+                min="0.01"
+                step="0.1"
+                disabled={disabled}
+                value={route.trafficWeight ?? 1}
+                onChange={(event) => saveRoutes(routes.map((item) => item.id === route.id
+                  ? { ...item, trafficWeight: Number(event.target.value) || 0 }
+                  : item))}
+                className={`${inputClass(disabled)} w-20 text-right`}
+              />
+            </label>
+          </div>
+        ))}
+        <p className="text-[10px] leading-relaxed text-zinc-500">Routes use exact method/path matching at compile time. Traffic share distributes modeled load across distinct backend services; service endpoint weights split traffic within each App Server.</p>
+      </section>
+    );
+  }
 
   if (data.componentId === "app-server") {
     return (
@@ -143,6 +460,23 @@ export function RuntimeModelEditor({
               />
             </label>
 
+            <div className="space-y-1 text-[10px] text-zinc-500">
+              <p>Optional request contract. Declared fields are checked against validation and route conditions; response fields are documentation-only.</p>
+              <EndpointFieldsEditor
+                title="Request fields"
+                fields={endpoint.requestFields ?? []}
+                request
+                disabled={disabled}
+                onChange={(requestFields) => saveEndpoints(updateEndpoint(endpoints, endpoint.id, (current) => ({ ...current, requestFields })))}
+              />
+              <EndpointFieldsEditor
+                title="Response fields"
+                fields={endpoint.responseFields ?? []}
+                disabled={disabled}
+                onChange={(responseFields) => saveEndpoints(updateEndpoint(endpoints, endpoint.id, (current) => ({ ...current, responseFields })))}
+              />
+            </div>
+
             <div className="space-y-1.5">
               {endpoint.steps.map((step, stepIndex) => (
                 <div key={step.id} className="relative ml-2 border-l border-cyan-700/50 pb-1 pl-2.5 last:border-l-transparent">
@@ -206,7 +540,7 @@ export function RuntimeModelEditor({
                           ...current,
                           steps: current.steps.map((item) => item.id === step.id ? { ...item, target: event.target.value } : item),
                         })))}
-                        placeholder={step.kind.startsWith("database-read") ? "table.column[,leading_column...]" : step.kind.startsWith("database-write") ? "table" : step.kind.startsWith("database-") ? "table" : step.kind.startsWith("cache-") ? "Cache key pattern" : "Topic or service target"}
+                        placeholder={step.kind.startsWith("database-") ? "table.column[,column...]" : step.kind.startsWith("cache-") ? "Cache key pattern" : "Topic or service target"}
                         className={`${inputClass(disabled)} mt-1 w-full`}
                       />
                       <select
@@ -504,6 +838,76 @@ export function RuntimeModelEditor({
     );
   }
 
+  if (data.componentId === "cache") {
+    return (
+      <section className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
+        <div>
+          <h3 className="text-xs font-semibold text-zinc-200">Redis configuration</h3>
+          <p className="mt-0.5 text-[11px] text-zinc-500">Document settings and catch invalid values before running.</p>
+        </div>
+        <label className="block space-y-1 text-[11px] text-zinc-400">
+          Maximum memory (MB)
+          <input
+            aria-label="Redis maximum memory in MB"
+            type="number"
+            min="0.01"
+            step="1"
+            disabled={disabled}
+            value={cacheConfig.maxMemoryMB ?? ""}
+            onChange={(event) => saveCacheConfig({
+              ...cacheConfig,
+              maxMemoryMB: event.target.value === "" ? undefined : Number(event.target.value),
+            })}
+            placeholder="e.g. 4096"
+            className={`${inputClass(disabled)} w-full`}
+          />
+        </label>
+        <label className="block space-y-1 text-[11px] text-zinc-400">
+          Default TTL (seconds; 0 means no expiration)
+          <input
+            aria-label="Redis default TTL in seconds"
+            type="number"
+            min="0"
+            step="1"
+            disabled={disabled}
+            value={cacheConfig.defaultTtlSeconds ?? ""}
+            onChange={(event) => saveCacheConfig({
+              ...cacheConfig,
+              defaultTtlSeconds: event.target.value === "" ? undefined : Number(event.target.value),
+            })}
+            placeholder="e.g. 3600"
+            className={`${inputClass(disabled)} w-full`}
+          />
+        </label>
+        <label className="block space-y-1 text-[11px] text-zinc-400">
+          Eviction policy
+          <select
+            aria-label="Redis eviction policy"
+            disabled={disabled}
+            value={cacheConfig.evictionPolicy ?? ""}
+            onChange={(event) => saveCacheConfig({
+              ...cacheConfig,
+              evictionPolicy: event.target.value
+                ? event.target.value as NonNullable<CacheConfiguration["evictionPolicy"]>
+                : undefined,
+            })}
+            className={`${inputClass(disabled)} w-full`}
+          >
+            <option value="">Not specified</option>
+            <option value="noeviction">noeviction</option>
+            <option value="allkeys-lru">allkeys-lru</option>
+            <option value="allkeys-lfu">allkeys-lfu</option>
+            <option value="volatile-lru">volatile-lru</option>
+            <option value="volatile-ttl">volatile-ttl</option>
+          </select>
+        </label>
+        <p className="rounded bg-zinc-800/70 p-2 text-[10px] leading-relaxed text-zinc-400">
+          These values are saved and validated, but do not yet change performance estimates. Cache hit rate is configured on each App Server cache-read step.
+        </p>
+      </section>
+    );
+  }
+
   if (data.componentId === "message-queue") {
     const deliveryMode = data.queueDeliveryMode === "competing" ? "competing" : "broadcast";
     return (
@@ -525,7 +929,154 @@ export function RuntimeModelEditor({
           <option value="competing">Competing consumer group</option>
         </select>
         <p className="text-[10px] leading-relaxed text-zinc-500">
-          Competing consumers split messages evenly; broadcast delivers each message to every connected consumer.
+          With subscriptions, competing consumers split each topic among its subscribers; broadcast sends each topic to every subscriber. Legacy or unmapped traffic uses connected consumers.
+        </p>
+        <div className="space-y-2 border-t border-zinc-700 pt-2">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h4 className="text-[11px] font-medium text-zinc-300">Topics</h4>
+              <p className="text-[10px] text-zinc-500">Publish steps are checked against configured topic names.</p>
+            </div>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => saveQueueConfig({
+                ...queueConfig,
+                topics: [...queueConfig.topics, { id: id("topic"), name: "" }],
+              })}
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-zinc-700 px-2 py-1 text-[10px] text-cyan-400 hover:bg-zinc-800 disabled:opacity-50"
+            ><Plus className="h-3 w-3" /> Add topic</button>
+          </div>
+          {queueConfig.topics.map((topic: QueueTopicDefinition, topicIndex) => (
+            <div key={topic.id} className="grid grid-cols-[minmax(0,1fr)_88px_auto] items-center gap-1.5">
+              <input
+                aria-label={`Queue topic ${topicIndex + 1} name`}
+                disabled={disabled}
+                value={topic.name}
+                onChange={(event) => saveQueueConfig({
+                  ...queueConfig,
+                  topics: queueConfig.topics.map((item) => item.id === topic.id
+                    ? { ...item, name: event.target.value }
+                    : item),
+                })}
+                placeholder="topic name"
+                className={`${inputClass(disabled)} min-w-0 font-mono`}
+              />
+              <input
+                aria-label={`Queue topic ${topicIndex + 1} retention hours`}
+                type="number"
+                min="0.01"
+                step="1"
+                disabled={disabled}
+                value={topic.retentionHours ?? ""}
+                onChange={(event) => saveQueueConfig({
+                  ...queueConfig,
+                  topics: queueConfig.topics.map((item) => item.id === topic.id
+                    ? { ...item, retentionHours: event.target.value === "" ? undefined : Number(event.target.value) }
+                    : item),
+                })}
+                placeholder="hours"
+                className={`${inputClass(disabled)} text-right`}
+              />
+              <button
+                type="button"
+                disabled={disabled}
+                aria-label="Remove queue topic"
+                onClick={() => saveQueueConfig({
+                  ...queueConfig,
+                  topics: queueConfig.topics.filter((item) => item.id !== topic.id),
+                })}
+                className="rounded p-1.5 text-zinc-500 hover:bg-zinc-700 hover:text-rose-400 disabled:opacity-50"
+              ><Trash2 className="h-3.5 w-3.5" /></button>
+            </div>
+          ))}
+        </div>
+        <div className="space-y-2 border-t border-zinc-700 pt-2">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h4 className="text-[11px] font-medium text-zinc-300">Consumer subscriptions</h4>
+              <p className="text-[10px] text-zinc-500">Map connected consumers to the topics they process.</p>
+            </div>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => saveQueueConfig({
+                ...queueConfig,
+                subscriptions: [...subscriptions, {
+                  id: id("subscription"),
+                  consumerNodeId: downstreamTargets[0]?.id ?? "",
+                  topicName: queueConfig.topics[0]?.name ?? "",
+                }],
+              })}
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-zinc-700 px-2 py-1 text-[10px] text-cyan-400 hover:bg-zinc-800 disabled:opacity-50"
+            ><Plus className="h-3 w-3" /> Add subscription</button>
+          </div>
+          {subscriptions.length === 0 && (
+            <p className="rounded bg-zinc-800/60 p-2 text-[10px] leading-relaxed text-zinc-500">
+              No explicit subscriptions. Existing designs keep their legacy aggregate consumer behavior.
+            </p>
+          )}
+          {subscriptions.map((subscription: QueueConsumerSubscription, subscriptionIndex) => {
+            const consumerExists = downstreamTargets.some((target) => target.id === subscription.consumerNodeId);
+            const topicExists = queueConfig.topics.some((topic) => topic.name === subscription.topicName);
+            return (
+              <div key={subscription.id} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-1.5">
+                <select
+                  aria-label={`Queue subscription ${subscriptionIndex + 1} consumer`}
+                  disabled={disabled}
+                  value={subscription.consumerNodeId}
+                  onChange={(event) => saveQueueConfig({
+                    ...queueConfig,
+                    subscriptions: subscriptions.map((item) => item.id === subscription.id
+                      ? { ...item, consumerNodeId: event.target.value }
+                      : item),
+                  })}
+                  className={`${inputClass(disabled)} min-w-0`}
+                >
+                  <option value="">Choose consumer</option>
+                  {!consumerExists && subscription.consumerNodeId && (
+                    <option value={subscription.consumerNodeId}>Missing consumer</option>
+                  )}
+                  {downstreamTargets.map((target) => (
+                    <option key={target.id} value={target.id}>{(target.data as ComponentNodeData).label}</option>
+                  ))}
+                </select>
+                <select
+                  aria-label={`Queue subscription ${subscriptionIndex + 1} topic`}
+                  disabled={disabled}
+                  value={subscription.topicName}
+                  onChange={(event) => saveQueueConfig({
+                    ...queueConfig,
+                    subscriptions: subscriptions.map((item) => item.id === subscription.id
+                      ? { ...item, topicName: event.target.value }
+                      : item),
+                  })}
+                  className={`${inputClass(disabled)} min-w-0`}
+                >
+                  <option value="">Choose topic</option>
+                  {!topicExists && subscription.topicName && (
+                    <option value={subscription.topicName}>Missing topic</option>
+                  )}
+                  {queueConfig.topics.map((topic) => (
+                    <option key={topic.id} value={topic.name}>{topic.name || "(unnamed topic)"}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  aria-label="Remove queue subscription"
+                  onClick={() => saveQueueConfig({
+                    ...queueConfig,
+                    subscriptions: subscriptions.filter((item) => item.id !== subscription.id),
+                  })}
+                  className="rounded p-1.5 text-zinc-500 hover:bg-zinc-700 hover:text-rose-400 disabled:opacity-50"
+                ><Trash2 className="h-3.5 w-3.5" /></button>
+              </div>
+            );
+          })}
+        </div>
+        <p className="rounded bg-zinc-800/70 p-2 text-[10px] leading-relaxed text-zinc-400">
+          Publish steps and subscriptions map topic traffic to consumers; legacy or unmapped traffic uses connected consumers. Retention is not simulated. Backlog is a constant-rate projection from an empty backlog over the selected duration, not broker state or a time series.
         </p>
       </section>
     );

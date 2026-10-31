@@ -72,7 +72,7 @@ export function MetricsDisplay() {
           <p className="mt-1 text-[10px] text-zinc-500">after retries / capacity rejection</p>
         </div>
         <div className="rounded-lg bg-zinc-800/70 px-3 py-2.5">
-          <p className="metric-label text-[10px]">Validation rejects</p>
+          <p className="metric-label text-[10px]">Rejected requests</p>
           <p className="metric-value mt-1 font-mono text-2xl font-semibold leading-none text-amber-300">
             {abbrev(result.rejectedRequestsPerSec)}
             <span className="ml-1 align-baseline text-xs font-normal text-zinc-500">req/s</span>
@@ -169,12 +169,12 @@ export function MetricsDisplay() {
                 </div>
                 {(m.rejectedQPS ?? 0) > 0 && (
                   <p className="mt-1 text-[10px] text-amber-300">
-                    {abbrev(m.rejectedQPS ?? 0)} requests/sec rejected by validation
+                    {abbrev(m.rejectedQPS ?? 0)} requests/sec rejected
                   </p>
                 )}
                 {m.queueDepth !== undefined && (
                   <div className="mt-2 flex items-center justify-between border-t border-zinc-700 pt-1.5 text-[10px]">
-                    <span className="text-zinc-500">Projected queue depth</span>
+                    <span className="text-zinc-500" title="Constant-rate projection from an empty backlog, not broker state or a time series.">Projected backlog</span>
                     <span className={`font-mono ${m.queueBacklogQPS && m.queueBacklogQPS > 0 ? "text-amber-300" : "text-zinc-300"}`}>
                       {abbrev(m.queueDepth)} messages
                       {m.queueBacklogQPS !== undefined && ` · +${abbrev(m.queueBacklogQPS)}/s`}

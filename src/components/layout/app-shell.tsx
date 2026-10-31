@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ReactFlowProvider, type Node } from "@xyflow/react";
+import { ReactFlowProvider, type Edge, type Node } from "@xyflow/react";
 import { X } from "lucide-react";
 import { TopBar } from "./top-bar";
 import { Sidebar } from "@/components/sidebar/Sidebar";
@@ -28,6 +28,8 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { HowItWorksDialog } from "@/components/dialogs/HowItWorksDialog";
 import { Walkthrough } from "@/components/Walkthrough";
 import { rehydrateAllStores } from "@/store/hydration";
+import { compileDesign } from "@/engine/compiler";
+import type { CustomEdgeData } from "@/store/canvasStore";
 
 export function AppShell() {
   const isMobile = useIsMobile();
@@ -108,13 +110,30 @@ export function AppShell() {
   const handleSave = useCallback(() => setSaveDialogOpen(true), []);
   const handleLoad = useCallback(() => setLoadDialogOpen(true), []);
   const handleSimulate = useCallback(() => {
-    const { nodes, edges } = useCanvasStore.getState();
+    const { nodes, edges, tabs, activeTabId } = useCanvasStore.getState();
     const { config } = useSimulationStore.getState();
 
     const componentNodes = nodes.filter((n) => n.type !== "text") as Node<ComponentNodeData>[];
 
     if (componentNodes.length === 0) {
       useAppStore.getState().showToast("No components to simulate", "info");
+      return;
+    }
+
+    const compilation = compileDesign(
+      componentNodes,
+      edges as Edge<CustomEdgeData>[],
+      config.requestProfiles
+    );
+    if (!compilation.ok) {
+      useAppStore.getState().setActiveRightTab("simulation");
+      const activeTab = tabs.find((tab) => tab.id === activeTabId);
+      useAppStore.getState().showToast(
+        activeTab?.readOnly
+          ? "This architecture-only reference is not executable; use it as guidance and configure an editable design"
+          : `Simulation blocked: fix ${compilation.errorCount} design error${compilation.errorCount === 1 ? "" : "s"}`,
+        "error"
+      );
       return;
     }
 

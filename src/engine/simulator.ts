@@ -1,7 +1,7 @@
 import type { Node, Edge } from "@xyflow/react";
 import type { ComponentNodeData } from "@/store/canvasStore";
 import type { ComponentFault, NodeMetrics, NodeStatus, RequestProfile, SimulationResult } from "@/types/simulation";
-import type { DatabaseTable, EndpointDefinition } from "@/types/component";
+import type { DatabaseTable, EndpointDefinition, GatewayRouteDefinition, QueueConfiguration, RateLimiterConfiguration } from "@/types/component";
 import {
   UTILIZATION_WARNING,
   UTILIZATION_CRITICAL,
@@ -16,6 +16,20 @@ const CACHE_HIT_RATE = 0.9;
 const FULL_SCAN_COST = 5;
 const BASELINE_TABLE_ROWS = 1000;
 const INDEX_WRITE_COST = 0.1;
+
+function getSustainedRateLimitQPS(config: RateLimiterConfiguration | undefined): number | undefined {
+  if (!config) return undefined;
+  const quota = config.requestsPerWindow;
+  const windowSeconds = config.windowSeconds;
+  if (
+    typeof quota !== "number" || !Number.isFinite(quota) || quota <= 0 ||
+    typeof windowSeconds !== "number" || !Number.isFinite(windowSeconds) || windowSeconds <= 0
+  ) return undefined;
+
+  const distinctKeys = config.keyBy === "global" ? 1 : config.estimatedDistinctKeys;
+  if (!Number.isInteger(distinctKeys) || (distinctKeys ?? 0) <= 0) return undefined;
+  return (quota / windowSeconds) * (distinctKeys as number);
+}
 
 interface TrafficAllocation {
   qps: number;
@@ -253,6 +267,7 @@ export function runSimulation(
   const warnings: string[] = [];
   const warnedConditions = new Set<string>();
   const validationRejectedQPS = new Map<string, number>();
+  const rateLimitRejectedQPS = new Map<string, number>();
   const nodeMetrics = new Map<string, NodeMetrics>();
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
   const sustainedDurationSec = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 10;
@@ -342,6 +357,9 @@ export function runSimulation(
 
   const bottleneckNodes: string[] = [];
   const deliveredQPS = new Map<string, number>();
+  const queueTopicOffers = new Map<string, Map<string, number>>();
+  const queueTopicAcceptedQPS = new Map<string, Map<string, number>>();
+  const queueLegacyAcceptedQPS = new Map<string, number>();
   const processed = new Set<string>();
 
   // Compute metrics for a node from its accumulated incoming QPS; returns delivered QPS.
@@ -374,8 +392,15 @@ export function runSimulation(
     const capacityDeliveryRatio = workQPS > 0
       ? Math.min(1, effectiveQPS / workQPS)
       : 1;
-    const delivered = Math.min(successQPS, successQPS * capacityDeliveryRatio);
-    const capacityRejectedQPS = Math.max(0, successQPS - delivered);
+    const capacityDelivered = Math.min(successQPS, successQPS * capacityDeliveryRatio);
+    const capacityRejectedQPS = Math.max(0, successQPS - capacityDelivered);
+    const rateLimit = data.componentId === "rate-limiter"
+      ? getSustainedRateLimitQPS(data.rateLimiterConfig as RateLimiterConfiguration | undefined)
+      : undefined;
+    const delivered = rateLimit === undefined ? capacityDelivered : Math.min(capacityDelivered, rateLimit);
+    if (rateLimit !== undefined) {
+      rateLimitRejectedQPS.set(nodeId, Math.max(0, capacityDelivered - delivered));
+    }
     deliveredQPS.set(nodeId, delivered);
 
     nodeMetrics.set(nodeId, {
@@ -396,6 +421,37 @@ export function runSimulation(
     if (children.length === 0) return new Map();
 
     const nodeComponentId = nodeMap.get(nodeId)?.data.componentId;
+    const gatewayRoutes = nodeComponentId === "api-gateway"
+      ? nodeMap.get(nodeId)?.data.routes as GatewayRouteDefinition[] | undefined
+      : undefined;
+    if (Array.isArray(gatewayRoutes) && gatewayRoutes.length > 0) {
+      const backendWeights = new Map<string, number>();
+      for (const route of gatewayRoutes) {
+        const backendId = route.backendNodeId;
+        if (!backendId || !children.includes(backendId)) continue;
+        const backendEndpoints = nodeMap.get(backendId)?.data.endpoints as EndpointDefinition[] | undefined;
+        const matchingEndpoint = backendEndpoints?.find(
+          (endpoint) => endpoint.method === route.method && endpoint.path === route.path
+        );
+        const configuredWeight = route.trafficWeight ?? matchingEndpoint?.trafficWeight ?? 1;
+        const weight = typeof configuredWeight === "number" && Number.isFinite(configuredWeight) && configuredWeight > 0
+          ? configuredWeight
+          : 0;
+        if (weight > 0) backendWeights.set(backendId, (backendWeights.get(backendId) ?? 0) + weight);
+      }
+      const totalBackendWeight = [...backendWeights.values()].reduce((sum, weight) => sum + weight, 0);
+      if (totalBackendWeight > 0) {
+        const result: TrafficDistribution = new Map(
+          children.map((childId) => [childId, { qps: 0, workQPS: 0, successQPS: 0, failedQPS: 0 }])
+        );
+        for (const [backendId, weight] of backendWeights) {
+          const qps = output * weight / totalBackendWeight;
+          result.set(backendId, { qps, workQPS: qps, successQPS: qps, failedQPS: 0 });
+        }
+        return result;
+      }
+    }
+
     const endpoints = nodeMap.get(nodeId)?.data.endpoints as EndpointDefinition[] | undefined;
     const configuredEndpoints = nodeComponentId === "app-server" && Array.isArray(endpoints)
       ? endpoints
@@ -463,9 +519,12 @@ export function runSimulation(
               operationQPS *= remainingReadFraction;
               workPerRequest = getDatabaseReadCost(targetId, step.target, nodeMap);
             } else if (step.kind === "cache-read") {
-              const hitRate = typeof step.cacheHitRate === "number" && Number.isFinite(step.cacheHitRate)
+              const configuredHitRate = typeof step.cacheHitRate === "number" && Number.isFinite(step.cacheHitRate)
                 ? Math.min(1, Math.max(0, step.cacheHitRate))
                 : CACHE_HIT_RATE;
+              const hitRate = typeof profile.cacheHitRate === "number" && Number.isFinite(profile.cacheHitRate)
+                ? Math.min(1, Math.max(0, profile.cacheHitRate))
+                : configuredHitRate;
               remainingReadFraction *= 1 - hitRate;
             } else if (step.kind === "database-write") {
               workPerRequest = getDatabaseWriteCost(targetId, step.target?.split(".")[0], nodeMap);
@@ -502,6 +561,17 @@ export function runSimulation(
               successQPS: (current.successQPS ?? current.qps) + operationQPS * (1 - operationFailureRate),
               failedQPS: (current.failedQPS ?? 0) + operationQPS * operationFailureRate,
             });
+            if (
+              step.kind === "publish-event"
+              && nodeMap.get(targetId)?.data.componentId === "message-queue"
+              && typeof step.target === "string"
+              && step.target.trim()
+            ) {
+              const topics = queueTopicOffers.get(targetId) ?? new Map<string, number>();
+              const topicName = step.target.trim();
+              topics.set(topicName, (topics.get(topicName) ?? 0) + operationQPS * (1 - operationFailureRate));
+              queueTopicOffers.set(targetId, topics);
+            }
             // Exhausted retries terminate this request's pipeline; later steps
             // should only see the requests that succeeded at this operation.
             activeQPS = Math.max(0, activeQPS - operationQPS * operationFailureRate);
@@ -546,6 +616,62 @@ export function runSimulation(
       });
 
       return result;
+    }
+
+    if (nodeComponentId === "message-queue") {
+      const queueConfig = nodeMap.get(nodeId)?.data.queueConfig as QueueConfiguration | undefined;
+      const subscriptions = Array.isArray(queueConfig?.subscriptions) ? queueConfig.subscriptions : undefined;
+      const topicOffers = queueTopicOffers.get(nodeId);
+      const totalTopicOffer = topicOffers
+        ? [...topicOffers.values()].reduce((sum, qps) => sum + qps, 0)
+        : 0;
+      if (subscriptions && topicOffers && totalTopicOffer > 0) {
+        const topicScale = Math.min(1, output / totalTopicOffer);
+        const acceptedTopics = new Map<string, number>();
+        const result: TrafficDistribution = new Map();
+        const configuredTopics = new Set(
+          Array.isArray(queueConfig?.topics)
+            ? queueConfig.topics.map((topic) => topic.name).filter((name) => typeof name === "string")
+            : []
+        );
+        const isCompeting = nodeMap.get(nodeId)?.data.queueDeliveryMode === "competing";
+        let acceptedTopicTotal = 0;
+
+        const addConsumerTraffic = (consumerId: string, qps: number) => {
+          const current = result.get(consumerId) ?? { qps: 0, workQPS: 0, successQPS: 0, failedQPS: 0 };
+          result.set(consumerId, {
+            qps: current.qps + qps,
+            workQPS: current.workQPS + qps,
+            successQPS: (current.successQPS ?? 0) + qps,
+            failedQPS: current.failedQPS ?? 0,
+          });
+        };
+
+        for (const [topicName, offeredQPS] of topicOffers) {
+          const topicQPS = offeredQPS * topicScale;
+          acceptedTopics.set(topicName, topicQPS);
+          acceptedTopicTotal += topicQPS;
+          if (!configuredTopics.has(topicName)) continue;
+
+          const subscribers = [...new Set(subscriptions
+            .filter((subscription) => subscription?.topicName === topicName)
+            .map((subscription) => subscription.consumerNodeId)
+            .filter((consumerId) => typeof consumerId === "string" && children.includes(consumerId)))];
+          if (subscribers.length === 0) continue;
+
+          const qpsPerSubscriber = isCompeting ? topicQPS / subscribers.length : topicQPS;
+          for (const consumerId of subscribers) addConsumerTraffic(consumerId, qpsPerSubscriber);
+        }
+
+        const legacyQPS = Math.max(0, output - acceptedTopicTotal);
+        queueTopicAcceptedQPS.set(nodeId, acceptedTopics);
+        queueLegacyAcceptedQPS.set(nodeId, legacyQPS);
+        if (legacyQPS > 0 && children.length > 0) {
+          const qpsPerChild = isCompeting ? legacyQPS / children.length : legacyQPS;
+          for (const childId of children) addConsumerTraffic(childId, qpsPerChild);
+        }
+        return result;
+      }
     }
 
     const cacheChildren = children.filter((childId) => nodeMap.get(childId)?.data.componentId === CACHE_COMPONENT_ID);
@@ -765,7 +891,8 @@ export function runSimulation(
         failedQPS: 0,
       });
     }
-    nodeMetrics.get(node.id)!.rejectedQPS = validationRejectedQPS.get(node.id) ?? 0;
+    nodeMetrics.get(node.id)!.rejectedQPS =
+      (validationRejectedQPS.get(node.id) ?? 0) + (rateLimitRejectedQPS.get(node.id) ?? 0);
   }
 
   // Estimate queue accumulation for a sustained interval. This is a
@@ -776,11 +903,62 @@ export function runSimulation(
     const consumers = adjacency.get(node.id) ?? [];
     const consumerDelivered = consumers.map((childId) => deliveredQPS.get(childId) ?? 0);
     const queueMode = node.data.queueDeliveryMode === "competing" ? "competing" : "broadcast";
-    const processedQPS = queueMode === "competing"
-      ? Math.min(acceptedQPS, consumerDelivered.reduce((sum, qps) => sum + qps, 0))
-      : consumers.length > 0
-        ? Math.min(acceptedQPS, ...consumerDelivered)
-        : 0;
+    const queueConfig = node.data.queueConfig as QueueConfiguration | undefined;
+    const topicRates = queueTopicAcceptedQPS.get(node.id);
+    let processedQPS: number;
+    if (topicRates && Array.isArray(queueConfig?.subscriptions)) {
+      const configuredTopicNames = new Set(
+        Array.isArray(queueConfig.topics)
+          ? queueConfig.topics.map((topic) => topic.name).filter((name) => typeof name === "string")
+          : []
+      );
+      const consumerCapacityRatio = (consumerId: string) => {
+        const incoming = incomingQPS.get(consumerId) ?? 0;
+        return incoming > 0
+          ? Math.min(1, (deliveredQPS.get(consumerId) ?? 0) / incoming)
+          : 0;
+      };
+      let topicProcessedQPS = 0;
+      for (const [topicName, topicQPS] of topicRates) {
+        if (!configuredTopicNames.has(topicName) || topicQPS <= 0) continue;
+        const subscribers = [...new Set(queueConfig.subscriptions
+          .filter((subscription) => subscription?.topicName === topicName)
+          .map((subscription) => subscription.consumerNodeId)
+          .filter((consumerId) => typeof consumerId === "string" && consumers.includes(consumerId)))];
+        if (subscribers.length === 0) continue;
+        if (queueMode === "competing") {
+          const sharePerSubscriber = topicQPS / subscribers.length;
+          topicProcessedQPS += Math.min(
+            topicQPS,
+            subscribers.reduce((sum, consumerId) => sum + sharePerSubscriber * consumerCapacityRatio(consumerId), 0)
+          );
+        } else {
+          topicProcessedQPS += topicQPS * Math.min(...subscribers.map(consumerCapacityRatio));
+        }
+      }
+
+      const legacyQPS = queueLegacyAcceptedQPS.get(node.id) ?? 0;
+      const legacyProcessedQPS = queueMode === "competing"
+        ? consumers.length > 0
+          ? Math.min(
+              legacyQPS,
+              consumers.reduce(
+                (sum, consumerId) => sum + (legacyQPS / consumers.length) * consumerCapacityRatio(consumerId),
+                0
+              )
+            )
+          : 0
+        : consumers.length > 0
+          ? legacyQPS * Math.min(...consumers.map(consumerCapacityRatio))
+          : 0;
+      processedQPS = Math.min(acceptedQPS, topicProcessedQPS + legacyProcessedQPS);
+    } else {
+      processedQPS = queueMode === "competing"
+        ? Math.min(acceptedQPS, consumerDelivered.reduce((sum, qps) => sum + qps, 0))
+        : consumers.length > 0
+          ? Math.min(acceptedQPS, ...consumerDelivered)
+          : 0;
+    }
     const backlogGrowthQPS = Math.max(0, acceptedQPS - processedQPS);
     const metric = nodeMetrics.get(node.id);
     if (!metric) continue;
@@ -816,12 +994,17 @@ export function runSimulation(
     (sum, metric) => sum + (metric.failedQPS ?? 0),
     0
   );
-  const rejectedRequestsPerSec = [...validationRejectedQPS.values()].reduce((sum, qps) => sum + qps, 0);
+  const endpointRejectedRequestsPerSec = [...validationRejectedQPS.values()].reduce((sum, qps) => sum + qps, 0);
+  const rateLimitedRequestsPerSec = [...rateLimitRejectedQPS.values()].reduce((sum, qps) => sum + qps, 0);
+  const rejectedRequestsPerSec = endpointRejectedRequestsPerSec + rateLimitedRequestsPerSec;
   if (failedOperationsPerSec > 0) {
     warnings.push(`About ${Math.ceil(failedOperationsPerSec)} operations/sec fail after retries or are rejected by capacity.`);
   }
-  if (rejectedRequestsPerSec > 0) {
-    warnings.push(`About ${Math.ceil(rejectedRequestsPerSec)} requests/sec are rejected by endpoint validation.`);
+  if (endpointRejectedRequestsPerSec > 0) {
+    warnings.push(`About ${Math.ceil(endpointRejectedRequestsPerSec)} requests/sec are rejected by endpoint validation.`);
+  }
+  if (rateLimitedRequestsPerSec > 0) {
+    warnings.push(`About ${Math.ceil(rateLimitedRequestsPerSec)} requests/sec are rejected by configured rate limits.`);
   }
 
   return {
