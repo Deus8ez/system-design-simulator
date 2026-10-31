@@ -3,9 +3,10 @@
 import { useState, useCallback } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
-import { ChevronDown, ChevronRight, Star } from "lucide-react";
+import { ChevronDown, ChevronRight, Play, Star } from "lucide-react";
 import { LEARNING_PATH, PROBLEM_CONCEPTS } from "@/data/learningPath";
 import { PROBLEMS } from "@/data/problems";
+import { TUTORIAL_BY_PROBLEM_ID } from "@/data/tutorials";
 import { useAppStore } from "@/store/appStore";
 
 const STORAGE_KEY = "sds-completed-problems";
@@ -41,7 +42,7 @@ function getConceptsForProblem(problemId: string): string[] {
   return PROBLEM_CONCEPTS.find((p) => p.problemId === problemId)?.concepts ?? [];
 }
 
-export function LearningPath() {
+export function LearningPath({ onStartTutorial }: { onStartTutorial?: (problemId: string) => void }) {
   const selectedProblemId = useAppStore((s) => s.selectedProblemId);
   const setSelectedProblem = useAppStore((s) => s.setSelectedProblem);
   const [expandedTiers, setExpandedTiers] = useState<Set<string>>(new Set(["Foundations"]));
@@ -210,6 +211,20 @@ export function LearningPath() {
                             {problem.difficulty}
                           </Badge>
                         </div>
+                        <button
+                          type="button"
+                          disabled={!TUTORIAL_BY_PROBLEM_ID.has(pid) || !onStartTutorial}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onStartTutorial?.(pid);
+                          }}
+                          className="ml-5 flex min-h-7 items-center gap-1.5 rounded px-1.5 text-[10px] font-medium text-cyan-300 transition-colors hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:text-zinc-500 disabled:hover:bg-transparent"
+                          aria-label={TUTORIAL_BY_PROBLEM_ID.has(pid) ? `Start guided tutorial: ${problem.title}` : `Guided tutorial coming soon: ${problem.title}`}
+                          title={TUTORIAL_BY_PROBLEM_ID.has(pid) ? "Start a guided, hands-on build" : "Tutorial content is being authored"}
+                        >
+                          <Play className="h-3 w-3" />
+                          {TUTORIAL_BY_PROBLEM_ID.has(pid) ? "Guided build" : "Tutorial soon"}
+                        </button>
                         {concepts.length > 0 && (
                           <div className="flex flex-wrap gap-1 ml-5">
                             {concepts.map((c) => (

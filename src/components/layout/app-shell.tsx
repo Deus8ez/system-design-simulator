@@ -30,6 +30,10 @@ import { Walkthrough } from "@/components/Walkthrough";
 import { rehydrateAllStores } from "@/store/hydration";
 import { compileDesign } from "@/engine/compiler";
 import type { CustomEdgeData } from "@/store/canvasStore";
+import { TutorialCoach } from "@/components/tutorial/TutorialCoach";
+import { useTutorialStore } from "@/store/tutorialStore";
+import { TUTORIAL_BY_PROBLEM_ID } from "@/data/tutorials";
+import { getTutorialDesignSignature } from "@/lib/tutorialEvaluator";
 
 export function AppShell() {
   const isMobile = useIsMobile();
@@ -161,6 +165,19 @@ export function AppShell() {
 
       useSimulationStore.getState().setResult(result);
       useSimulationStore.getState().setRunning(false);
+      const currentCanvas = useCanvasStore.getState();
+      const activeTutorialId = useTutorialStore.getState().activeProblemId;
+      if (
+        activeTutorialId &&
+        currentCanvas.activeTabId === `tutorial-${activeTutorialId}` &&
+        activeTabId === currentCanvas.activeTabId
+      ) {
+        useTutorialStore.getState().recordSimulation(activeTutorialId, {
+          requestsPerSec: config.requestsPerSec,
+          designSignature: getTutorialDesignSignature(componentNodes, edges),
+          timestamp: result.timestamp,
+        });
+      }
       useAppStore.getState().showToast("Simulation complete!", "success");
     }, 100);
   }, []);
@@ -195,6 +212,45 @@ export function AppShell() {
     if (isMobile) setMobileSidebarOpen(true);
     else useAppStore.getState().setLeftSidebarOpen(true);
   }, [isMobile]);
+
+  const handleStartTutorial = useCallback((problemId: string) => {
+    const tutorial = TUTORIAL_BY_PROBLEM_ID.get(problemId);
+    if (!tutorial) return;
+    const tabId = `tutorial-${problemId}`;
+    const canvas = useCanvasStore.getState();
+    if (canvas.tabs.some((tab) => tab.id === tabId)) {
+      canvas.switchTab(tabId);
+    } else {
+      useTutorialStore.getState().reset(problemId);
+      const problem = PROBLEMS.find((item) => item.id === problemId);
+      useCanvasStore.getState().addTab({
+        id: tabId,
+        label: `${problem?.title ?? problemId} · Tutorial`,
+        nodes: [],
+        edges: [],
+      });
+    }
+    useTutorialStore.getState().start(problemId);
+    useAppStore.getState().setSelectedProblem(problemId);
+    useAppStore.getState().setActiveLeftTab("components");
+    useAppStore.getState().setLeftSidebarOpen(true);
+    if (isMobile) setMobileSidebarOpen(false);
+  }, [isMobile]);
+
+  const handleRunTutorialScenario = useCallback((requestsPerSec: number) => {
+    useSimulationStore.getState().setConfig({ requestsPerSec });
+    useAppStore.getState().setActiveRightTab("simulation");
+    if (isMobile) {
+      setMobileRightOpen(true);
+    } else if (!useAppStore.getState().rightPanelOpen) {
+      useAppStore.getState().toggleRightPanel();
+    }
+    handleSimulate();
+  }, [handleSimulate, isMobile]);
+
+  const handleResetTutorialCanvas = useCallback(() => {
+    useCanvasStore.getState().clearCanvas();
+  }, []);
 
   const handleLoadReference = useCallback(() => {
     const problemId = useAppStore.getState().selectedProblemId;
@@ -322,6 +378,7 @@ export function AppShell() {
           {/* Desktop inline sidebar (hidden on mobile) */}
           <Sidebar
             open={leftSidebarOpen}
+            onStartTutorial={handleStartTutorial}
             onCreateProblem={() => setCreateProblemDialogOpen(true)}
             onCreateCustomComponent={() => setCreateComponentDialogOpen(true)}
             variant="desktop"
@@ -332,6 +389,10 @@ export function AppShell() {
             onLoadReference={handleLoadReference}
             onStartInterview={() => setInterviewDialogOpen(true)}
             onShowGuide={() => setHowItWorksOpen(true)}
+          />
+          <TutorialCoach
+            onRunScenario={handleRunTutorialScenario}
+            onResetCanvas={handleResetTutorialCanvas}
           />
 
           {/* Desktop inline right panel (hidden on mobile) */}
@@ -367,6 +428,7 @@ export function AppShell() {
                 </div>
                 <div className="min-h-0 flex-1">
                   <Sidebar
+                    onStartTutorial={handleStartTutorial}
                     onCreateProblem={() => {
                       setCreateProblemDialogOpen(true);
                       setMobileSidebarOpen(false);
