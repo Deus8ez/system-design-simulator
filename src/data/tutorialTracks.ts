@@ -1,4 +1,6 @@
 import type { SystemTutorial, TutorialLevel, TutorialStep } from "@/types/tutorial";
+import { PROBLEMS } from "@/data/problems";
+import { MAX_SIMULATION_QPS, MIN_SIMULATION_QPS } from "@/engine/constants";
 
 type TrackSpec = {
   problemId: string;
@@ -67,7 +69,7 @@ const specs: TrackSpec[] = [
     problemId: "music-streaming", title: "Music Streaming", focus: "looking up tracks and delivering audio objects", table: "tracks", columns: ["trackId", "artistId", "objectKey", "duration", "publishedAt"], index: "artistId", readPath: "/tracks/:id", writePath: "/tracks", extraCore: ["object-storage"], middle: "cache", middleFocus: "cache hot track metadata and playback manifests", middleWhy: "Frequently played tracks and metadata are requested repeatedly; a cache can reduce database reads and improve the control-plane lookup path.", middleTradeoff: "Caching metadata does not deliver audio bytes or implement adaptive bitrate; audio segments belong in object storage/CDN delivery paths.", highComponent: "cdn", highFocus: "deliver audio segments near listeners", highWhy: "Edge caching reduces origin load and network distance for popular catalog audio.", highTradeoff: "Regional rights, offline synchronization, codec ladders, and segment eviction need product-specific logic beyond this model.", highEdge: ["cdn", "object-storage"], highExtra: ["object-storage"],
   },
   {
-    problemId: "ecommerce", title: "E-Commerce", focus: "browsing a product catalog and placing orders", table: "orders", columns: ["orderId", "customerId", "status", "total", "createdAt"], index: "customerId", readPath: "/products", writePath: "/orders", middle: "cache", middleFocus: "cache popular product catalog reads", middleWhy: "Product detail and category pages are read-heavy and often repeated; caching reduces catalog database load while writes update inventory and orders through authoritative paths.", middleTradeoff: "Price and stock must not be trusted from stale cache at checkout; invalidation and conditional inventory updates need explicit design.", highComponent: "message-queue", highFocus: "publish order events for fulfillment and projections", highWhy: "An order event lets fulfillment, email, and analytics react independently after order acceptance.", highTradeoff: "The message queue does not provide atomic event sourcing or exactly-once side effects; consumers need idempotency and reconciliation.",
+    problemId: "ecommerce", title: "E-Commerce", focus: "browsing a product catalog and placing orders", table: "orders", columns: ["orderId", "customerId", "status", "total", "createdAt"], index: "customerId", readPath: "/products", writePath: "/orders", middle: "cache", middleFocus: "cache popular product catalog reads", middleWhy: "Product detail and category pages are read-heavy and often repeated; caching reduces catalog database load while writes update inventory and orders through authoritative paths.", middleTradeoff: "Price and stock must not be trusted from stale cache at checkout; invalidation and conditional inventory updates need explicit design.", highComponent: "sharded-counter", highFocus: "spread hot inventory and product engagement updates", highWhy: "Popular products can create hot inventory and engagement keys. Sharding distributes update pressure and aggregates values for reads.", highTradeoff: "Aggregated counters can be briefly stale and must not replace an authoritative transactional inventory reservation.",
   },
   {
     problemId: "team-messaging", title: "Team Messaging", focus: "storing channel messages and notifying active members", table: "channel_messages", columns: ["workspaceId", "channelId", "messageId", "authorId", "createdAt"], index: "channelId", readPath: "/channels/:id/messages", writePath: "/channels/:id/messages", middle: "queue", middleFocus: "index and fan out messages asynchronously", middleWhy: "Search indexing, notifications, and channel fan-out are independent consumers; a broker prevents those tasks from slowing the message write path.", middleTradeoff: "Workspace partitioning, search relevance, and ordered thread materialization need additional partition and consistency policies.", highComponent: "websocket-server", highFocus: "push new channel messages to active clients", highWhy: "Persistent connections deliver updates without each client polling every channel for new messages.", highTradeoff: "Connection routing and workspace-level noisy-neighbor isolation are not covered by the graph or queue contracts.",
@@ -122,6 +124,31 @@ const specs: TrackSpec[] = [
   },
 ];
 
+const COMPONENT_LABELS: Record<string, string> = {
+  "load-balancer": "Load Balancer",
+  "api-gateway": "API Gateway",
+  "app-server": "App Server",
+  "sql-db": "SQL Database",
+  "nosql-db": "NoSQL Database",
+  "timeseries-db": "Time-Series Database",
+  "object-storage": "Object Storage",
+  "message-queue": "Message Queue",
+  "stream-processor": "Stream Processor",
+  "rate-limiter": "Rate Limiter",
+  "sharded-counter": "Sharded Counter",
+  "websocket-server": "WebSocket Server",
+  "notification-service": "Notification Service",
+  "search": "Search Service",
+  "distributed-lock": "Distributed Lock",
+  "coordination-service": "Coordination Service",
+  "geospatial-index": "Geospatial Index",
+  "cdn": "CDN",
+  "monitoring": "Monitoring",
+  "task-scheduler": "Task Scheduler",
+};
+
+const componentLabel = (componentId: string) => COMPONENT_LABELS[componentId] ?? componentId;
+
 function pathEdges(database: string, extraCore: string[] = []) {
   return [
     { sourceComponentId: "load-balancer", targetComponentId: "api-gateway" },
@@ -132,6 +159,10 @@ function pathEdges(database: string, extraCore: string[] = []) {
 }
 
 function makeTrack(spec: TrackSpec): SystemTutorial {
+  const problem = PROBLEMS.find((item) => item.id === spec.problemId);
+  const highQps = Math.min(MAX_SIMULATION_QPS, Math.max(problem?.requirements.readsPerSec ?? 5_000, problem?.requirements.writesPerSec ?? 5_000));
+  const lowQps = Math.max(MIN_SIMULATION_QPS, Math.ceil(highQps * 0.01));
+  const mediumQps = Math.max(lowQps + 1, Math.ceil(highQps * 0.1));
   const database = spec.database ?? "sql-db";
   const extraCore = spec.extraCore ?? [];
   const readTarget = `${spec.table}.${spec.index}`;
@@ -140,8 +171,8 @@ function makeTrack(spec: TrackSpec): SystemTutorial {
     {
       id: `${spec.problemId}-low-path`,
       title: "Build the first request path",
-      prompt: `Add Load Balancer → API Gateway → App Server → ${database}, then connect any required media or file storage shown in the lesson. This is the starting architecture for ${spec.focus}.`,
-      why: `The load balancer and gateway provide a controlled entry path, the app server owns business rules for ${spec.focus}, and ${database} keeps the authoritative records.`,
+      prompt: `Add Load Balancer → API Gateway → App Server → ${componentLabel(database)}${extraCore.length ? `, plus ${extraCore.map(componentLabel).join(" and ")}` : ""}. Connect the request path and each App Server storage dependency. This is the starting architecture for ${spec.focus}.`,
+      why: `The load balancer and gateway provide a controlled entry path, the app server owns business rules for ${spec.focus}, and ${componentLabel(database)} keeps the authoritative records${extraCore.length ? ` while ${extraCore.map(componentLabel).join(" and ")} store large or specialized data` : ""}.`,
       tradeoff: "One service and one primary database are easier to operate at low load, but every read and write now shares those capacity and availability boundaries.",
       hint: "Add the components from the palette and connect the nodes directly in the requested order.",
       objective: {
@@ -169,10 +200,18 @@ function makeTrack(spec: TrackSpec): SystemTutorial {
     {
       id: `${spec.problemId}-low-schema`,
       title: "Model the durable records",
-      prompt: `On ${database}, create a ${spec.table} table with ${spec.columns.join(", ")}; add an index on ${spec.index} for the lesson's main lookup.`,
+      prompt: `On ${componentLabel(database)}, create a ${spec.table} table with ${spec.columns.join(", ")}; add an index on ${spec.index} for the lesson's main lookup.`,
       why: `The schema documents the data required for ${spec.focus}, and the ${spec.index} index makes the expected lookup explicit instead of relying on a full scan.`,
       tradeoff: "Indexes consume storage and add write amplification. Add them for observed query patterns rather than indexing every field.",
       objective: { kind: "database-schema", databaseComponentId: database, tableName: spec.table, columns: spec.columns, indexedColumns: [spec.index] },
+    },
+    {
+      id: `${spec.problemId}-low-baseline`,
+      title: "Run the low-traffic baseline",
+      prompt: `Run the ${lowQps.toLocaleString()} requests/sec scenario and inspect the request path, accepted throughput, and any component bottleneck before introducing a scaling layer.`,
+      why: "A baseline gives you a reference point for the cache, queue, and capacity changes later in the tutorial.",
+      tradeoff: "This deterministic estimate models aggregate component capacity; it does not predict production latency percentiles or domain-specific correctness.",
+      objective: { kind: "simulation-checkpoint", requestsPerSec: lowQps },
     },
   ];
 
@@ -200,11 +239,11 @@ function makeTrack(spec: TrackSpec): SystemTutorial {
         {
           id: `${spec.problemId}-medium-queue`,
           title: "Move background work off the request path",
-          prompt: `Add a Message Queue and Stream Processor. Create the topic ${spec.problemId}-events, subscribe the processor in competing-consumer mode, add a publish-event step to POST /events, and connect App Server → Queue → Processor with an asynchronous producer edge. Use it for this lesson's job: ${spec.middleFocus}.`,
+          prompt: `Add a Message Queue and Stream Processor. Create the topic ${spec.problemId}-events, subscribe the processor in competing-consumer mode, add a publish-event step to the existing POST ${spec.writePath} endpoint, and connect App Server → Queue → Processor with an asynchronous producer edge. Use it for this lesson's job: ${spec.middleFocus}.`,
           why: spec.middleWhy,
           tradeoff: spec.middleTradeoff,
           hint: "Configure the topic and consumer subscription on the queue, the publish operation on App Server, and mark the App Server → Queue edge asynchronous.",
-          objective: { kind: "queue-contract", serviceComponentId: "app-server", queueComponentId: "message-queue", consumerComponentId: "stream-processor", topicName: `${spec.problemId}-events`, producerEndpoint: { method: "POST", path: "/events" }, deliveryMode: "competing", requireAsync: true },
+          objective: { kind: "queue-contract", serviceComponentId: "app-server", queueComponentId: "message-queue", consumerComponentId: "stream-processor", topicName: `${spec.problemId}-events`, producerEndpoint: { method: "POST", path: spec.writePath }, deliveryMode: "competing", requireAsync: true },
         },
         {
           id: `${spec.problemId}-medium-worker-scale`,
@@ -216,12 +255,20 @@ function makeTrack(spec: TrackSpec): SystemTutorial {
         },
       ];
   mediumSteps.push({
-    id: `${spec.problemId}-medium-review`,
-    title: "Check the medium-load assumptions",
-    prompt: "Increase App Server replicas to at least two, run the 1,000 requests/sec scenario, and compare the added cache or worker tier with the original single-service design.",
-    why: "A moderate-load checkpoint encourages you to compare the new architecture against its low-load baseline and identify which tier now has independent capacity.",
-    tradeoff: "The simulator is a deterministic aggregate estimator; it does not prove cache coherence, queue time-series behavior, or production latency percentiles.",
+    id: `${spec.problemId}-medium-app-scale`,
+    title: "Scale the synchronous service tier",
+    prompt: "Increase App Server replicas to at least two. Explain whether the API or the newly added cache/worker tier should be monitored as the next bottleneck.",
+    why: "Stateless application instances can process independent requests in parallel, but their downstream dependencies still impose separate limits.",
+    tradeoff: "More replicas add cost and may not improve throughput if storage, cache, or consumer capacity is already saturated.",
     objective: { kind: "replicas", components: [{ componentId: "app-server", minimum: 2 }] },
+  });
+  mediumSteps.push({
+    id: `${spec.problemId}-medium-baseline`,
+    title: "Compare the medium-load design",
+    prompt: `Run the ${mediumQps.toLocaleString()} requests/sec scenario and compare accepted throughput, bottlenecks, and projected queue backlog (if this lesson uses a queue) with the low-load baseline.`,
+    why: "The checkpoint helps you connect the cache or asynchronous boundary to the aggregate behavior the simulator actually models.",
+    tradeoff: "The simulator is a deterministic aggregate estimator; it does not prove cache coherence, queue time-series behavior, or production latency percentiles.",
+    objective: { kind: "simulation-checkpoint", requestsPerSec: mediumQps },
   });
 
   const highEdge = spec.highEdge ?? ["app-server", spec.highComponent];
@@ -229,7 +276,7 @@ function makeTrack(spec: TrackSpec): SystemTutorial {
     {
       id: `${spec.problemId}-high-extension`,
       title: "Add a system-specific scale boundary",
-      prompt: `Add ${spec.highComponent}${(spec.highExtra ?? []).includes(spec.highComponent) ? "" : ` and any required supporting component${spec.highExtra?.length ? "s" : ""}`} to the graph. Connect ${highEdge[0]} → ${highEdge[1]} and use it to ${spec.highFocus}.`,
+      prompt: `Ensure ${componentLabel(spec.highComponent)}${spec.highExtra?.length ? ` and ${spec.highExtra.map(componentLabel).join(" and ")}` : ""} are present in the design. Connect ${componentLabel(highEdge[0])} → ${componentLabel(highEdge[1])} and use this boundary to ${spec.highFocus}.`,
       why: spec.highWhy,
       tradeoff: spec.highTradeoff,
       hint: "The graph can verify that the tier is present and wired; the advanced algorithm or operational guarantee remains a design discussion.",
@@ -246,17 +293,17 @@ function makeTrack(spec: TrackSpec): SystemTutorial {
     {
       id: `${spec.problemId}-high-simulation`,
       title: "Inspect the high-traffic result",
-      prompt: "Run the 5,000 requests/sec scenario on the current design. Compare offered and accepted traffic, bottlenecks, and queue backlog if present; state one assumption that must be validated before production.",
+      prompt: `Run the ${highQps.toLocaleString()} requests/sec scenario on the current design. Compare offered and accepted traffic, bottlenecks, and queue backlog if present; state one assumption that must be validated before production.`,
       why: "The final checkpoint connects architecture choices to the simulator's observable aggregate outcome and asks you to distinguish modeled facts from operational assumptions.",
       tradeoff: "This is not a production SLO or proof of correctness. Domain-specific behavior such as ranking, geospatial accuracy, transactions, encryption, or adaptive delivery may remain conceptual.",
-      objective: { kind: "simulation-checkpoint", requestsPerSec: 5_000 },
+      objective: { kind: "simulation-checkpoint", requestsPerSec: highQps },
     },
   ];
 
   const levels: [TutorialLevel, TutorialLevel, TutorialLevel] = [
-    { id: "low", title: "Build the essential system", trafficLabel: "Low traffic · 100 requests/sec", requestsPerSec: 100, goal: `Build the smallest durable architecture for ${spec.focus}.`, steps: lowSteps },
-    { id: "medium", title: "Separate hot paths and background work", trafficLabel: "Medium traffic · 1,000 requests/sec", requestsPerSec: 1_000, goal: `Reduce repeated work or decouple long-running work for ${spec.focus}.`, steps: mediumSteps },
-    { id: "high", title: "Scale and inspect the design", trafficLabel: "High traffic · 5,000 requests/sec", requestsPerSec: 5_000, goal: `Add a system-specific scaling boundary for ${spec.focus} and examine its trade-offs.`, steps: highSteps },
+    { id: "low", title: "Build the essential system", trafficLabel: `Low traffic · ${lowQps.toLocaleString()} requests/sec`, requestsPerSec: lowQps, goal: `Build the smallest durable architecture for ${spec.focus}.`, steps: lowSteps },
+    { id: "medium", title: "Separate hot paths and background work", trafficLabel: `Medium traffic · ${mediumQps.toLocaleString()} requests/sec`, requestsPerSec: mediumQps, goal: `Reduce repeated work or decouple long-running work for ${spec.focus}.`, steps: mediumSteps },
+    { id: "high", title: "Scale and inspect the design", trafficLabel: `High traffic · ${highQps.toLocaleString()} requests/sec`, requestsPerSec: highQps, goal: `Add a system-specific scaling boundary for ${spec.focus} and examine its trade-offs.`, steps: highSteps },
   ];
   return {
     problemId: spec.problemId,
@@ -264,6 +311,7 @@ function makeTrack(spec: TrackSpec): SystemTutorial {
       `Model the main request and data path for ${spec.focus}.`,
       `Explain the cost and consistency trade-offs of ${spec.middle === "cache" ? "caching" : "asynchronous processing"} as traffic grows.`,
       `Distinguish simulator-verified topology and capacity from domain guarantees that need separate design.`,
+      `Interpret the per-problem traffic checkpoints as scaled scenarios derived from its stated read/write workload.`,
     ],
     levels,
   };

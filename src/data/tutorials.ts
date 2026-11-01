@@ -17,8 +17,8 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
       {
         id: "low",
         title: "Build the essential redirect service",
-        trafficLabel: "Low traffic · 100 requests/sec",
-        requestsPerSec: 100,
+        trafficLabel: "Low traffic · 1,000 requests/sec",
+        requestsPerSec: 1_000,
         goal: "Create a small, valid service that can create short links and resolve them.",
         steps: [
           {
@@ -85,10 +85,10 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
           {
             id: "url-low-baseline",
             title: "Run the low-traffic baseline",
-            prompt: "Run the 100 requests/sec scenario and inspect which component receives the traffic. Record what assumptions this simple design makes about database capacity.",
+            prompt: "Run the 1,000 requests/sec scenario and inspect which component receives the traffic. Record what assumptions this simple design makes about database capacity.",
             why: "A baseline gives you a comparison point for the cache and scaling changes in later levels.",
             tradeoff: "The result is a deterministic capacity estimate, not a production latency guarantee.",
-            objective: { kind: "simulation-checkpoint", requestsPerSec: 100 },
+            objective: { kind: "simulation-checkpoint", requestsPerSec: 1_000 },
           },
         ],
       },
@@ -239,8 +239,8 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
       {
         id: "low",
         title: "Store a video and its metadata",
-        trafficLabel: "Low traffic · 100 requests/sec",
-        requestsPerSec: 100,
+        trafficLabel: "Low traffic · 2,000 requests/sec",
+        requestsPerSec: 2_000,
         goal: "Build a minimal upload and catalog path with metadata in a database and media bytes in object storage.",
         steps: [
           {
@@ -267,7 +267,7 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
           {
             id: "video-low-contract",
             title: "Define upload and playback metadata APIs",
-            prompt: "Configure POST /videos to write metadata and GET /videos/:videoId to read metadata. Add matching Gateway routes and connect database operations to SQL.",
+            prompt: "Configure POST /videos to write metadata and GET /videos/:videoId to read metadata. Add matching Gateway routes, connect database operations to SQL, and finish both endpoint pipelines with Return response.",
             why: "Explicit APIs clarify which data is written at upload and which metadata is needed to start playback.",
             tradeoff: "This first level models metadata and object storage boundaries only; it does not simulate media bytes, codecs, or playback protocols.",
             objective: {
@@ -297,18 +297,18 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
           {
             id: "video-low-baseline",
             title: "Run the metadata-service baseline",
-            prompt: "Run the 100 requests/sec scenario and inspect the API and database load before adding background workers.",
+            prompt: "Run the 2,000 requests/sec scenario and inspect the API and database load before adding background workers.",
             why: "The baseline separates the cost of accepting metadata requests from future processing work.",
             tradeoff: "The estimate models request flow and capacity, not media upload bandwidth or playback quality.",
-            objective: { kind: "simulation-checkpoint", requestsPerSec: 100 },
+            objective: { kind: "simulation-checkpoint", requestsPerSec: 2_000 },
           },
         ],
       },
       {
         id: "medium",
         title: "Process uploads asynchronously",
-        trafficLabel: "Medium traffic · 5,000 requests/sec",
-        requestsPerSec: 5_000,
+        trafficLabel: "Medium traffic · 20,000 requests/sec",
+        requestsPerSec: 20_000,
         goal: "Make upload completion fast by placing transcoding behind a durable work queue.",
         steps: [
           {
@@ -318,26 +318,24 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
             why: "Transcoding is CPU-intensive and may take much longer than accepting an upload. A queue lets the API acknowledge work while processors scale independently.",
             tradeoff: "The upload-to-playable delay increases and consumers must handle retries safely. Queue backlog is only a constant-rate projection in this simulator.",
             objective: {
-              kind: "queue-contract",
-              serviceComponentId: "app-server",
+              kind: "queue-setup",
               queueComponentId: "message-queue",
               consumerComponentId: "stream-processor",
               topicName: "video-transcoding",
-              producerEndpoint: { method: "POST", path: "/videos/:videoId/complete" },
               deliveryMode: "competing",
-              requireAsync: true,
             },
           },
           {
             id: "video-medium-publish",
             title: "Publish work after upload completion",
-            prompt: "Add POST /videos/:videoId/complete. Configure it to update SQL metadata and publish a video-transcoding event to the queue; keep this processing edge asynchronous.",
+            prompt: "Add POST /videos/:videoId/complete. Configure it to update SQL metadata and publish a video-transcoding event to the queue; keep this processing edge asynchronous and finish the endpoint with Return response.",
             why: "The completion event is a clean boundary: the API records that the upload is ready, then a worker performs expensive transformations without blocking the request.",
             tradeoff: "Eventual processing means status can remain pending. Clients need a status/read path and production systems need retry and dead-letter policies.",
             objective: {
               kind: "endpoint-contracts",
               serviceComponentId: "app-server",
               gatewayComponentId: "api-gateway",
+              asyncEdges: [{ sourceComponentId: "app-server", targetComponentId: "message-queue" }],
               contracts: [
                 { method: "POST", path: "/videos/:videoId/complete", steps: [
                   { kind: "database-write", targetComponentId: "sql-db", target: "videos.status" },
@@ -357,18 +355,18 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
           {
             id: "video-medium-baseline",
             title: "Inspect the processing backlog",
-            prompt: "Run the 5,000 requests/sec scenario and compare queue acceptance with processor capacity.",
+            prompt: "Run the 20,000 requests/sec scenario and compare queue acceptance with processor capacity.",
             why: "The queue projection highlights whether background processing can keep pace with incoming work.",
             tradeoff: "The backlog is a constant-rate projection from an empty queue, not a time-series broker simulation.",
-            objective: { kind: "simulation-checkpoint", requestsPerSec: 5_000 },
+            objective: { kind: "simulation-checkpoint", requestsPerSec: 20_000 },
           },
         ],
       },
       {
         id: "high",
         title: "Scale playback delivery",
-        trafficLabel: "High traffic · 100,000 requests/sec",
-        requestsPerSec: 100_000,
+        trafficLabel: "High traffic · 500,000 requests/sec",
+        requestsPerSec: 500_000,
         goal: "Reduce origin load on popular reads and retain headroom in the service and processing tiers.",
         steps: [
           {
@@ -386,7 +384,7 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
           {
             id: "video-high-capacity",
             title: "Add service and processor headroom",
-            prompt: "With playback delivery and API traffic sharing the 100,000 requests/sec scenario, scale App Server to at least 10 replicas, SQL to at least 5, Object Storage to at least 4, and keep Stream Processor at 2 or more. Then inspect request handling versus queue processing.",
+            prompt: "With playback delivery and API traffic sharing the 500,000 requests/sec scenario, scale App Server to at least 10 replicas, SQL to at least 5, Object Storage to at least 4, and keep Stream Processor at 2 or more. Then inspect request handling versus queue processing.",
             why: "Playback metadata reads and transcoding jobs have different capacity profiles. The simulation helps distinguish their aggregate bottlenecks.",
             tradeoff: "Replica counts are an aggregate capacity approximation. Real systems also depend on encoding profiles, storage bandwidth, regions, and network egress.",
             objective: { kind: "replicas", components: [
@@ -407,10 +405,10 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
           {
             id: "video-high-baseline",
             title: "Compare high-load delivery and processing",
-            prompt: "Run the 100,000 requests/sec scenario. Inspect request throughput and projected queue backlog separately.",
+            prompt: "Run the 500,000 requests/sec scenario. Inspect request throughput and projected queue backlog separately.",
             why: "Media delivery reads and transcoding jobs scale differently; separate metrics help avoid scaling the wrong tier.",
             tradeoff: "Geographic edge placement, adaptive bitrate, and storage/network bandwidth are not modeled by this estimate.",
-            objective: { kind: "simulation-checkpoint", requestsPerSec: 100_000 },
+            objective: { kind: "simulation-checkpoint", requestsPerSec: 500_000 },
           },
         ],
       },
@@ -427,8 +425,8 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
       {
         id: "low",
         title: "Define a simple global quota",
-        trafficLabel: "Low traffic · 100 requests/sec",
-        requestsPerSec: 100,
+        trafficLabel: "Low traffic · 500 requests/sec",
+        requestsPerSec: 500,
         goal: "Model one service protected by a global sustained request quota.",
         steps: [
           {
@@ -453,7 +451,7 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
           {
             id: "limit-low-policy",
             title: "Configure the global policy",
-            prompt: "Configure a sliding-window global policy of at least 100 requests per one-second window.",
+            prompt: "Configure a sliding-window global policy of 100 requests per one-second window.",
             why: "The quota, time window, and key scope define what is being protected. A global key creates one shared sustained budget.",
             tradeoff: "The estimator enforces aggregate sustained QPS only; it does not model exact window boundaries, concurrent counters, or transient bursts.",
             objective: {
@@ -489,24 +487,24 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
           {
             id: "limit-low-simulation",
             title: "Observe policy rejection separately",
-            prompt: "Run the 100 requests/sec scenario and inspect accepted traffic, rate-limit rejections, and component failures.",
-            why: "The policy should admit traffic below its configured sustained ceiling. Rejection metrics represent intentional quota enforcement, not a component crash.",
+            prompt: "Run the 500 requests/sec scenario and inspect accepted traffic, rate-limit rejections, and component failures. With the 100 requests/sec global quota, excess traffic should be rejected by policy.",
+            why: "Offered load above the global quota is intentionally rejected; that is different from a component failing under its hardware capacity.",
             tradeoff: "The model reports aggregate steady-rate behavior and does not model short bursts or exact window boundaries.",
-            objective: { kind: "simulation-checkpoint", requestsPerSec: 100 },
+            objective: { kind: "simulation-checkpoint", requestsPerSec: 500 },
           },
         ],
       },
       {
         id: "medium",
         title: "Give clients isolated budgets",
-        trafficLabel: "Medium traffic · 10,000 requests/sec",
-        requestsPerSec: 10_000,
+        trafficLabel: "Medium traffic · 5,000 requests/sec",
+        requestsPerSec: 5_000,
         goal: "Change from a shared budget to a per-client policy and reason about the aggregate estimate.",
         steps: [
           {
             id: "limit-medium-key",
             title: "Choose a client identity key",
-            prompt: "Change the policy to use client-id and set an estimated distinct-key population. Keep the per-key quota and window explicit.",
+            prompt: "Change the policy to use client-id, set 100 requests per one-second window, and estimate at least 100 active client IDs.",
             why: "Per-client quotas reduce noisy-neighbor behavior. The number of active keys affects the aggregate allowed rate.",
             tradeoff: "The estimate assumes keys are evenly represented; skewed clients and key churn are not modeled.",
             objective: {
@@ -542,24 +540,24 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
           {
             id: "limit-medium-simulation",
             title: "Check the per-client aggregate estimate",
-            prompt: "Run the 10,000 requests/sec scenario and inspect the effective sustained quota and limiter utilization.",
+            prompt: "Run the 5,000 requests/sec scenario and inspect the effective sustained quota and limiter utilization.",
             why: "Per-key quotas combine into an aggregate estimate based on distinct keys, which can differ substantially from a global quota.",
             tradeoff: "This assumes even key distribution and does not prove fairness under skewed client traffic.",
-            objective: { kind: "simulation-checkpoint", requestsPerSec: 10_000 },
+            objective: { kind: "simulation-checkpoint", requestsPerSec: 5_000 },
           },
         ],
       },
       {
         id: "high",
         title: "Reason about high-volume enforcement",
-        trafficLabel: "High traffic · 100,000 requests/sec",
-        requestsPerSec: 100_000,
+        trafficLabel: "High traffic · 50,000 requests/sec",
+        requestsPerSec: 50_000,
         goal: "Tune aggregate sustained capacity and interpret rejected traffic separately from component overload.",
         steps: [
           {
             id: "limit-high-capacity",
             title: "Scale the enforcement and service path",
-            prompt: "For 100,000 requests/sec, configure at least 2 API Gateway replicas and 20 App Server replicas. Keep the Rate Limiter at 2 or more replicas and connected in front of the Gateway.",
+            prompt: "For 50,000 requests/sec, configure at least 2 API Gateway replicas and 20 App Server replicas. Keep the Rate Limiter at 2 or more replicas and connected in front of the Gateway.",
             why: "A high quota is not useful if downstream components cannot accept the admitted traffic. Capacity must be planned across every synchronous hop.",
             tradeoff: "Limiter replicas require coordinated state in a real deployment; simply multiplying instances does not guarantee a globally consistent quota.",
             objective: { kind: "replicas", components: [
@@ -571,7 +569,7 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
           {
             id: "limit-high-policy",
             title: "Tune quota and key population",
-            prompt: "Set the sustained per-client quota and estimated distinct-key population for the high-load scenario. Keep any token-bucket burst capacity documented as metadata rather than a promised simulation behavior.",
+            prompt: "Set a 50-request per-client, one-second token-bucket quota and estimate at least 1,000 active client IDs (about 50,000 requests/sec aggregate). Keep burst capacity documented as metadata, not a promised simulation behavior.",
             why: "Capacity depends on both per-key policy and how many active keys receive requests. Making both assumptions visible helps expose under- or over-provisioning.",
             tradeoff: "The simulator estimates a steady aggregate ceiling; it does not evaluate token refill timing or fairness under skew.",
             objective: {
@@ -579,7 +577,7 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
               componentId: "rate-limiter",
               algorithm: "token-bucket",
               keyBy: "client-id",
-              minimumRequestsPerWindow: 100,
+              minimumRequestsPerWindow: 50,
               windowSeconds: 1,
               minimumDistinctKeys: 1_000,
             },
@@ -590,7 +588,7 @@ const PILOT_TUTORIALS: SystemTutorial[] = [
             prompt: "Run the high-load scenario. Compare offered load, accepted throughput, limiter rejections, and component failures; explain which requests were rejected by policy and which failed from capacity.",
             why: "Rate-limit rejection is an intentional control decision, while capacity failure indicates the system could not serve offered traffic. They require different remedies.",
             tradeoff: "Aggregate simulation is useful for directional reasoning, not exact per-client fairness, burst behavior, or distributed consistency guarantees.",
-            objective: { kind: "simulation-checkpoint", requestsPerSec: 100_000 },
+            objective: { kind: "simulation-checkpoint", requestsPerSec: 50_000 },
           },
           {
             id: "limit-high-review",

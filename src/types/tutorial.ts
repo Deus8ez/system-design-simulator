@@ -18,6 +18,7 @@ export type TutorialObjective =
       kind: "endpoint-contracts";
       serviceComponentId: string;
       gatewayComponentId?: string;
+      asyncEdges?: TutorialEdgeRequirement[];
       contracts: Array<{
         method: EndpointMethod;
         path: string;
@@ -43,6 +44,13 @@ export type TutorialObjective =
       writeEndpoint: { method: EndpointMethod; path: string };
       ttlSeconds?: number;
       requireInvalidation?: boolean;
+    }
+  | {
+      kind: "queue-setup";
+      queueComponentId: string;
+      consumerComponentId: string;
+      topicName: string;
+      deliveryMode?: "broadcast" | "competing";
     }
   | {
       kind: "queue-contract";

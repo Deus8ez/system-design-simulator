@@ -11,6 +11,7 @@ export interface TutorialEvaluationContext {
   simulation?: {
     result: SimulationResult | null;
     requestsPerSec: number;
+    recordedRequestsPerSec?: number;
     recordedSignature?: string;
     recordedTimestamp?: number;
     currentSignature?: string;
@@ -40,6 +41,33 @@ function componentNodes(nodes: Node<ComponentNodeData>[], componentId: string) {
   return nodes.filter(
     (node) => node.type !== "text" && node.data.componentId === componentId,
   );
+}
+
+const COMPONENT_NAME_OVERRIDES: Record<string, string> = {
+  "api-gateway": "API Gateway",
+  "app-server": "App Server",
+  "auth-service": "Auth Service",
+  cache: "Cache / Redis",
+  cdn: "CDN",
+  dns: "DNS",
+  "load-balancer": "Load Balancer",
+  "message-queue": "Message Queue",
+  "nosql-db": "NoSQL Database",
+  "object-storage": "Object Storage",
+  "pub-sub": "Pub/Sub",
+  "rate-limiter": "Rate Limiter",
+  search: "Search / ES",
+  "sql-db": "SQL Database",
+  "stream-processor": "Stream Processor",
+  "timeseries-db": "Time-Series Database",
+  "websocket-server": "WebSocket Server",
+};
+
+function componentName(componentId: string): string {
+  return COMPONENT_NAME_OVERRIDES[componentId] ?? componentId
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function componentByNodeId(nodes: Node<ComponentNodeData>[], nodeId: string | undefined) {
@@ -72,18 +100,18 @@ export function evaluateTutorialObjective(
         if (instances.length < minimum) {
           return {
             complete: false,
-            feedback: `Add ${minimum > 1 ? `at least ${minimum} ` : "a "}${required.componentId} component.`,
+            feedback: `Add ${minimum > 1 ? `at least ${minimum} ` : "the "}${componentName(required.componentId)} component${minimum > 1 ? "s" : ""}.`,
           };
         }
         if (required.replicas !== undefined && !instances.some((node) => node.data.replicas >= required.replicas!)) {
-          return { complete: false, feedback: `Set ${required.componentId} replicas to at least ${required.replicas}.` };
+          return { complete: false, feedback: `Set ${componentName(required.componentId)} replicas to at least ${required.replicas}.` };
         }
       }
       for (const edge of objective.edges ?? []) {
         if (!hasComponentEdge(nodes, edges, edge.sourceComponentId, edge.targetComponentId)) {
           return {
             complete: false,
-            feedback: `Connect ${edge.sourceComponentId} directly to ${edge.targetComponentId}.`,
+            feedback: `Connect ${componentName(edge.sourceComponentId)} directly to ${componentName(edge.targetComponentId)}.`,
           };
         }
       }
@@ -91,7 +119,7 @@ export function evaluateTutorialObjective(
         if (hasComponentEdge(nodes, edges, edge.sourceComponentId, edge.targetComponentId)) {
           return {
             complete: false,
-            feedback: `Remove the direct ${edge.sourceComponentId} → ${edge.targetComponentId} connection after rerouting traffic.`,
+            feedback: `Remove the direct ${componentName(edge.sourceComponentId)} → ${componentName(edge.targetComponentId)} connection after rerouting traffic.`,
           };
         }
       }
@@ -101,7 +129,7 @@ export function evaluateTutorialObjective(
     case "endpoint-contracts": {
       const services = componentNodes(nodes, objective.serviceComponentId);
       if (services.length === 0) {
-        return { complete: false, feedback: `Add ${objective.serviceComponentId} before configuring its API.` };
+        return { complete: false, feedback: `Add ${componentName(objective.serviceComponentId)} before configuring its API.` };
       }
       for (const contract of objective.contracts) {
         const service = services.find((node) =>
@@ -134,7 +162,7 @@ export function evaluateTutorialObjective(
         if (objective.gatewayComponentId) {
           const gateways = componentNodes(nodes, objective.gatewayComponentId);
           if (!hasComponentEdge(nodes, edges, objective.gatewayComponentId, objective.serviceComponentId)) {
-            return { complete: false, feedback: `Connect ${objective.gatewayComponentId} directly to ${objective.serviceComponentId}.` };
+            return { complete: false, feedback: `Connect ${componentName(objective.gatewayComponentId)} directly to ${componentName(objective.serviceComponentId)}.` };
           }
           const matchingRoute = gateways.some((gateway) =>
             (gateway.data.routes ?? []).some((route) =>
@@ -148,6 +176,19 @@ export function evaluateTutorialObjective(
           }
         }
       }
+      for (const edge of objective.asyncEdges ?? []) {
+        const isAsync = edges.some((candidate) =>
+          candidate.data && typeof candidate.data === "object" && "async" in candidate.data && candidate.data.async === true &&
+          componentNodes(nodes, edge.sourceComponentId).some((source) => source.id === candidate.source) &&
+          componentNodes(nodes, edge.targetComponentId).some((target) => target.id === candidate.target),
+        );
+        if (!isAsync) {
+          return {
+            complete: false,
+            feedback: `Mark the ${componentName(edge.sourceComponentId)} → ${componentName(edge.targetComponentId)} connection as asynchronous.`,
+          };
+        }
+      }
       return { complete: true, feedback: "The requested endpoint contracts and routes are configured." };
     }
 
@@ -156,7 +197,7 @@ export function evaluateTutorialObjective(
       const table = databases.flatMap((database) => database.data.tables ?? [])
         .find((item) => item.name.toLowerCase() === objective.tableName.toLowerCase());
       if (!table) {
-        return { complete: false, feedback: `Add a ${objective.tableName} table to ${objective.databaseComponentId}.` };
+        return { complete: false, feedback: `Add a ${objective.tableName} table to ${componentName(objective.databaseComponentId)}.` };
       }
       const columnNames = new Set(table.columns.map((column) => column.name.toLowerCase()));
       const missingColumns = objective.columns.filter((name) => !columnNames.has(name.toLowerCase()));
@@ -174,9 +215,9 @@ export function evaluateTutorialObjective(
 
     case "cache-behavior": {
       const caches = componentNodes(nodes, objective.cacheComponentId);
-      if (caches.length === 0) return { complete: false, feedback: `Add a ${objective.cacheComponentId} component.` };
+      if (caches.length === 0) return { complete: false, feedback: `Add a ${componentName(objective.cacheComponentId)} component.` };
       if (!hasComponentEdge(nodes, edges, objective.serviceComponentId, objective.cacheComponentId)) {
-        return { complete: false, feedback: `Connect ${objective.serviceComponentId} to ${objective.cacheComponentId}.` };
+        return { complete: false, feedback: `Connect ${componentName(objective.serviceComponentId)} to ${componentName(objective.cacheComponentId)}.` };
       }
       const cacheIds = new Set(caches.map((node) => node.id));
       const serviceHasStep = (method: string, path: string, kind: string) =>
@@ -198,12 +239,36 @@ export function evaluateTutorialObjective(
       return { complete: true, feedback: "Cache reads and write-path coherence settings are configured." };
     }
 
+    case "queue-setup": {
+      const queues = componentNodes(nodes, objective.queueComponentId);
+      const consumers = componentNodes(nodes, objective.consumerComponentId);
+      if (queues.length === 0) return { complete: false, feedback: `Add a ${componentName(objective.queueComponentId)}.` };
+      if (consumers.length === 0) return { complete: false, feedback: `Add a ${componentName(objective.consumerComponentId)}.` };
+      const configured = queues.some((queue) => {
+        const config = queue.data.queueConfig;
+        return config?.topics?.some((topic) => topic.name === objective.topicName) &&
+          config.subscriptions?.some((subscription) =>
+            subscription.topicName === objective.topicName &&
+            consumers.some((consumer) => consumer.id === subscription.consumerNodeId),
+          ) &&
+          (!objective.deliveryMode || queue.data.queueDeliveryMode === objective.deliveryMode) &&
+          hasComponentEdge(nodes, edges, objective.queueComponentId, objective.consumerComponentId);
+      });
+      if (!configured) {
+        return {
+          complete: false,
+          feedback: `Configure topic “${objective.topicName}”, subscribe ${componentName(objective.consumerComponentId)}, and connect ${componentName(objective.queueComponentId)} → ${componentName(objective.consumerComponentId)}.`,
+        };
+      }
+      return { complete: true, feedback: "The queue topic and consumer subscription are configured." };
+    }
+
     case "queue-contract": {
       const queues = componentNodes(nodes, objective.queueComponentId);
       const consumers = componentNodes(nodes, objective.consumerComponentId);
       const services = componentNodes(nodes, objective.serviceComponentId);
-      if (queues.length === 0) return { complete: false, feedback: `Add a ${objective.queueComponentId}.` };
-      if (consumers.length === 0) return { complete: false, feedback: `Add a ${objective.consumerComponentId}.` };
+      if (queues.length === 0) return { complete: false, feedback: `Add a ${componentName(objective.queueComponentId)}.` };
+      if (consumers.length === 0) return { complete: false, feedback: `Add a ${componentName(objective.consumerComponentId)}.` };
       const configured = queues.some((queue) => {
         const config = queue.data.queueConfig;
         return config?.topics?.some((topic) => topic.name === objective.topicName) &&
@@ -231,7 +296,7 @@ export function evaluateTutorialObjective(
       if (!configured) {
         return {
           complete: false,
-          feedback: `Configure topic “${objective.topicName}”, publish it from ${objective.serviceComponentId}, subscribe ${objective.consumerComponentId}, and connect producer → queue → consumer.`,
+          feedback: `Configure topic “${objective.topicName}”, publish it from ${componentName(objective.serviceComponentId)}, subscribe ${componentName(objective.consumerComponentId)}, and connect producer → queue → consumer.`,
         };
       }
       return { complete: true, feedback: "The producer, topic, and consumer are connected." };
@@ -256,12 +321,12 @@ export function evaluateTutorialObjective(
       }
       for (const edge of objective.requiredEdges ?? []) {
         if (!hasComponentEdge(nodes, edges, edge.sourceComponentId, edge.targetComponentId)) {
-          return { complete: false, feedback: `Connect ${edge.sourceComponentId} directly to ${edge.targetComponentId} so the policy is on the request path.` };
+          return { complete: false, feedback: `Connect ${componentName(edge.sourceComponentId)} directly to ${componentName(edge.targetComponentId)} so the policy is on the request path.` };
         }
       }
       for (const edge of objective.forbiddenEdges ?? []) {
         if (hasComponentEdge(nodes, edges, edge.sourceComponentId, edge.targetComponentId)) {
-          return { complete: false, feedback: `Remove the direct ${edge.sourceComponentId} → ${edge.targetComponentId} connection so requests cannot bypass the limiter.` };
+          return { complete: false, feedback: `Remove the direct ${componentName(edge.sourceComponentId)} → ${componentName(edge.targetComponentId)} connection so requests cannot bypass the limiter.` };
         }
       }
       return { complete: true, feedback: "The sustained rate-limit policy matches the lesson requirements." };
@@ -272,7 +337,7 @@ export function evaluateTutorialObjective(
         const hasReplicas = componentNodes(nodes, requirement.componentId)
           .some((item) => item.data.replicas >= requirement.minimum);
         if (!hasReplicas) {
-          return { complete: false, feedback: `Set ${requirement.componentId} replicas to at least ${requirement.minimum}.` };
+          return { complete: false, feedback: `Set ${componentName(requirement.componentId)} replicas to at least ${requirement.minimum}.` };
         }
       }
       return { complete: true, feedback: "The required service tiers have the requested replica capacity." };
@@ -299,6 +364,9 @@ export function evaluateTutorialObjective(
       }
       if (simulation.requestsPerSec !== objective.requestsPerSec) {
         return { complete: false, feedback: `Set the simulation load to ${objective.requestsPerSec.toLocaleString()} requests/sec and run it again.` };
+      }
+      if (simulation.recordedRequestsPerSec !== objective.requestsPerSec) {
+        return { complete: false, feedback: `Run and record a fresh simulation at ${objective.requestsPerSec.toLocaleString()} requests/sec before checking this step.` };
       }
       if (
         simulation.recordedSignature !== simulation.currentSignature ||

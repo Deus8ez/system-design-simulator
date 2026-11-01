@@ -48,6 +48,7 @@ export function ComponentPalette({ onCreateCustomComponent, onComponentAdded }: 
   const [search, setSearch] = useState("");
   const { screenToFlowPosition } = useReactFlow();
   const addNode = useCanvasStore((s) => s.addNode);
+  const canvasNodes = useCanvasStore((s) => s.nodes);
   const customComponents = useCustomComponentsStore((s) => s.components);
   const deleteCustomComponent = useCustomComponentsStore((s) => s.deleteComponent);
   const isCoarse = useIsCoarsePointer();
@@ -81,13 +82,33 @@ export function ComponentPalette({ onCreateCustomComponent, onComponentAdded }: 
         x: rect ? rect.left + rect.width / 2 : window.innerWidth / 2,
         y: rect ? rect.top + rect.height / 2 : window.innerHeight / 2,
       });
-      // Jitter the center so repeated taps don't stack exactly on top
-      const jitter = () => (Math.random() - 0.5) * 60;
+      // Fill nearby grid slots so quick-added components remain selectable and wireable.
+      const offsets = [{ x: 0, y: 0 }];
+      for (let ring = 1; ring <= 8; ring += 1) {
+        for (let column = -ring; column <= ring; column += 1) {
+          offsets.push(
+            { x: column * 280, y: -ring * 180 },
+            { x: column * 280, y: ring * 180 },
+          );
+        }
+        for (let row = -ring + 1; row < ring; row += 1) {
+          offsets.push(
+            { x: -ring * 280, y: row * 180 },
+            { x: ring * 280, y: row * 180 },
+          );
+        }
+      }
+      const position = offsets
+        .map((offset) => ({ x: center.x + offset.x, y: center.y + offset.y }))
+        .find((candidate) => canvasNodes.every((node) =>
+          Math.abs(node.position.x - candidate.x) >= 280 ||
+          Math.abs(node.position.y - candidate.y) >= 180,
+        )) ?? center;
 
       const newNode: Node<ComponentNodeData> = {
         id: `${componentId}-${crypto.randomUUID()}`,
         type: "component",
-        position: { x: center.x + jitter(), y: center.y + jitter() },
+        position,
         data: {
           componentId: component.id,
           label: component.label,
@@ -103,7 +124,7 @@ export function ComponentPalette({ onCreateCustomComponent, onComponentAdded }: 
       useAppStore.getState().showToast(`Added ${component.label}`, "success");
       onComponentAdded?.();
     },
-    [screenToFlowPosition, addNode, onComponentAdded]
+    [screenToFlowPosition, addNode, canvasNodes, onComponentAdded]
   );
 
   const query = search.toLowerCase().trim();

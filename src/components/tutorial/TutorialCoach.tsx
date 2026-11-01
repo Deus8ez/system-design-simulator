@@ -33,8 +33,8 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
   const requestProfiles = useSimulationStore((state) => state.config.requestProfiles);
   const simulationResult = useSimulationStore((state) => state.result);
   const simulationConfigQps = useSimulationStore((state) => state.config.requestsPerSec);
-  const [feedback, setFeedback] = useState<{ ok: boolean; message: string } | null>(null);
-  const [showHint, setShowHint] = useState(false);
+  const [feedback, setFeedback] = useState<{ contextKey: string; ok: boolean; message: string } | null>(null);
+  const [hintContext, setHintContext] = useState<string | null>(null);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
   const tutorial = activeProblemId ? TUTORIAL_BY_PROBLEM_ID.get(activeProblemId) : undefined;
@@ -44,6 +44,7 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
   const completedIds = progress?.completedStepIds ?? [];
   const currentStep = level?.steps.find((step) => !completedIds.includes(step.id));
   const problemTitle = PROBLEMS.find((problem) => problem.id === activeProblemId)?.title ?? activeProblemId;
+  const currentObjectiveKey = `${activeProblemId ?? ""}:${level?.id ?? ""}:${currentStep?.id ?? ""}`;
 
   if (!tutorial || !progress || activeTabId !== tabId || !level) return null;
 
@@ -74,12 +75,13 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
       simulation: {
         result: simulationResult,
         requestsPerSec: simulationConfigQps,
+        recordedRequestsPerSec: progress.lastSimulation?.requestsPerSec,
         recordedSignature: progress.lastSimulation?.designSignature,
         recordedTimestamp: progress.lastSimulation?.timestamp,
         currentSignature: designSignature,
       },
     });
-    setFeedback({ ok: result.complete, message: result.feedback });
+    setFeedback({ contextKey: currentObjectiveKey, ok: result.complete, message: result.feedback });
     if (result.complete) completeStep(activeProblemId!, currentStep.id);
   };
 
@@ -93,7 +95,7 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
     if (nextLevel && unlocked.has(nextLevel.id)) {
       setLevel(activeProblemId!, nextLevel.id);
       setFeedback(null);
-      setShowHint(false);
+      setHintContext(null);
     }
   };
 
@@ -101,7 +103,7 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
     onResetCanvas();
     resetProgress(activeProblemId!);
     setFeedback(null);
-    setShowHint(false);
+    setHintContext(null);
   };
 
   const completedInLevel = level.steps.filter((step) => completedIds.includes(step.id)).length;
@@ -139,7 +141,7 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
                 key={item.id}
                 type="button"
                 disabled={!isUnlocked}
-                onClick={() => { setLevel(activeProblemId!, item.id); setFeedback(null); setShowHint(false); }}
+                onClick={() => { setLevel(activeProblemId!, item.id); setFeedback(null); setHintContext(null); }}
                 className={`rounded-md border px-2 py-1 text-[10px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isSelected ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-200" : done ? "border-emerald-500/30 text-emerald-300" : "border-zinc-800 text-zinc-400 hover:bg-zinc-900"}`}
                 aria-current={isSelected ? "step" : undefined}
                 title={item.trafficLabel}
@@ -172,11 +174,11 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
                 <p className="mt-2 text-[11px] leading-relaxed text-zinc-400"><span className="font-semibold text-cyan-300">Why:</span> {currentStep.why}</p>
                 <p className="mt-1 text-[11px] leading-relaxed text-zinc-500"><span className="font-semibold text-zinc-400">Trade-off:</span> {currentStep.tradeoff}</p>
                 {currentStep.hint && (
-                  <button type="button" onClick={() => setShowHint((value) => !value)} className="mt-2 inline-flex min-h-7 items-center gap-1 rounded px-1.5 text-[10px] text-amber-300 hover:bg-amber-500/10">
-                    <Lightbulb className="h-3 w-3" /> {showHint ? "Hide hint" : "Need a hint?"}
+                  <button type="button" onClick={() => setHintContext((value) => value === currentObjectiveKey ? null : currentObjectiveKey)} className="mt-2 inline-flex min-h-7 items-center gap-1 rounded px-1.5 text-[10px] text-amber-300 hover:bg-amber-500/10">
+                    <Lightbulb className="h-3 w-3" /> {hintContext === currentObjectiveKey ? "Hide hint" : "Need a hint?"}
                   </button>
                 )}
-                {showHint && currentStep.hint && <p className="mt-1 rounded bg-amber-500/5 p-2 text-[10px] text-amber-100">{currentStep.hint}</p>}
+                {hintContext === currentObjectiveKey && currentStep.hint && <p className="mt-1 rounded bg-amber-500/5 p-2 text-[10px] text-amber-100">{currentStep.hint}</p>}
               </div>
             </div>
           </div>
@@ -186,7 +188,7 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
           </div>
         )}
 
-        {feedback && (
+        {feedback?.contextKey === currentObjectiveKey && (
           <p className={`rounded-md px-2.5 py-2 text-[11px] ${feedback.ok ? "bg-emerald-500/10 text-emerald-200" : "bg-amber-500/10 text-amber-100"}`}>
             {feedback.ok ? "Step complete — " : "Not yet — "}{feedback.message}
           </p>
@@ -195,9 +197,14 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
         <footer className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-[10px] text-zinc-500">Check your work after adding/configuring the requested items.</span>
           {currentStep?.objective.kind === "simulation-checkpoint" ? (
-            <button type="button" onClick={runScenario} className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-cyan-600 px-2.5 text-[11px] font-semibold text-white hover:bg-cyan-500">
-              <Play className="h-3 w-3" /> Run {level.requestsPerSec.toLocaleString()} req/s
-            </button>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={runScenario} className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-cyan-600 px-2.5 text-[11px] font-semibold text-white hover:bg-cyan-500">
+                <Play className="h-3 w-3" /> Run {level.requestsPerSec.toLocaleString()} req/s
+              </button>
+              <button type="button" onClick={checkCurrentStep} className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 text-[11px] font-semibold text-zinc-200 hover:bg-zinc-800">
+                <Check className="h-3 w-3" /> Check step
+              </button>
+            </div>
           ) : currentStep ? (
             <button type="button" onClick={checkCurrentStep} className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-cyan-600 px-2.5 text-[11px] font-semibold text-white hover:bg-cyan-500">
               <Check className="h-3 w-3" /> Check step

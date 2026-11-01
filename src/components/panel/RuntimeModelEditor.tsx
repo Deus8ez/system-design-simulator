@@ -693,29 +693,42 @@ export function RuntimeModelEditor({
     );
   }
 
-  if (data.componentId === "sql-db") {
+  if (data.componentId === "sql-db" || data.componentId === "nosql-db") {
+    const isSqlDatabase = data.componentId === "sql-db";
     return (
       <section className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <h3 className="text-xs font-semibold text-zinc-200">Relational schema</h3>
-            <p className="mt-0.5 text-[11px] text-zinc-500">At 1,000 rows, scans cost 5 work units and indexed reads 1; costs scale with table size and leading index columns.</p>
+            <h3 className="text-xs font-semibold text-zinc-200">
+              {isSqlDatabase ? "Relational schema" : "Collection schema"}
+            </h3>
+            <p className="mt-0.5 text-[11px] text-zinc-500">
+              {isSqlDatabase
+                ? "At 1,000 rows, scans cost 5 work units and indexed reads 1; costs scale with table size and leading index columns."
+                : "Define document fields and lookup indexes for the collection. Indexed reads reduce modeled lookup work as the collection grows."}
+            </p>
           </div>
           <button
             type="button"
             disabled={disabled}
             onClick={() => saveTables([...tables, {
               id: id("table"),
-              name: `table_${tables.length + 1}`,
+              name: `${isSqlDatabase ? "table" : "collection"}_${tables.length + 1}`,
               estimatedRows: 1000,
               columns: [{ id: id("column"), name: "id", dataType: "UUID", nullable: false, primaryKey: true }],
               indexes: [],
             }])}
             className="inline-flex shrink-0 items-center gap-1 rounded border border-zinc-700 px-2 py-1 text-[11px] text-cyan-400 hover:bg-zinc-800 disabled:opacity-50"
-          ><Plus className="h-3 w-3" /> Add table</button>
+          ><Plus className="h-3 w-3" /> {isSqlDatabase ? "Add table" : "Add collection"}</button>
         </div>
 
-        {tables.length === 0 && <p className="rounded bg-zinc-800/70 p-2 text-[11px] text-zinc-500">No tables yet. Add a table and define its access keys.</p>}
+        {tables.length === 0 && (
+          <p className="rounded bg-zinc-800/70 p-2 text-[11px] text-zinc-500">
+            {isSqlDatabase
+              ? "No tables yet. Add a table and define its access keys."
+              : "No collections yet. Add a collection and define its fields and lookup indexes."}
+          </p>
+        )}
 
         {tables.map((table, tableIndex) => (
           <div key={table.id} className="space-y-2 rounded-md border border-zinc-700/80 bg-zinc-800/50 p-2">
@@ -820,7 +833,7 @@ export function RuntimeModelEditor({
           </div>
         ))}
 
-        {tables.length > 0 && (
+        {isSqlDatabase && tables.length > 0 && (
           <div className="space-y-2 border-t border-zinc-700 pt-2">
             <button
               type="button"

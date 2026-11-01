@@ -8,6 +8,7 @@ import { Play, Loader2, RotateCcw } from "lucide-react";
 import { useSimulationStore } from "@/store/simulationStore";
 import { useCanvasStore, type ComponentNodeData } from "@/store/canvasStore";
 import type { ComponentFault, RequestProfile } from "@/types/simulation";
+import { MAX_SIMULATION_QPS, MIN_SIMULATION_QPS } from "@/engine/constants";
 
 const PRESETS = [
   { label: "Light", value: 1000 },
@@ -102,14 +103,14 @@ export function SimulationControls({ onSimulate }: SimulationControlsProps) {
             <label className="text-xs text-zinc-400">Requests/sec</label>
             <input
               type="number"
-              min={100}
-              max={500000}
+              min={MIN_SIMULATION_QPS}
+              max={MAX_SIMULATION_QPS}
               step={100}
               value={config.requestsPerSec}
               onChange={(e) => {
                 const rawValue = Number(e.target.value);
                 if (!Number.isFinite(rawValue)) return;
-                const clampedValue = Math.min(500000, Math.max(100, Math.round(rawValue)));
+                const clampedValue = Math.min(MAX_SIMULATION_QPS, Math.max(MIN_SIMULATION_QPS, Math.round(rawValue)));
                 setConfig({ requestsPerSec: clampedValue });
               }}
               className="h-7 w-[120px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-right font-mono text-xs text-cyan-500 outline-none transition-colors focus:border-cyan-500"
@@ -119,8 +120,8 @@ export function SimulationControls({ onSimulate }: SimulationControlsProps) {
           <Slider
             value={[config.requestsPerSec]}
             onValueChange={(v) => setConfig({ requestsPerSec: Array.isArray(v) ? v[0] : v })}
-            min={100}
-            max={500000}
+            min={MIN_SIMULATION_QPS}
+            max={MAX_SIMULATION_QPS}
             step={100}
             className=""
           />
