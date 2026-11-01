@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { Edge, Node } from "@xyflow/react";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
-import { Check, ChevronRight, Lightbulb, Play, RotateCcw, X } from "lucide-react";
+import { BookOpen, Check, ChevronRight, Lightbulb, Play, RotateCcw, X } from "lucide-react";
 import { TUTORIAL_BY_PROBLEM_ID } from "@/data/tutorials";
 import { PROBLEMS } from "@/data/problems";
 import { compileDesign } from "@/engine/compiler";
@@ -26,7 +26,9 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
   const completeStep = useTutorialStore((state) => state.completeStep);
   const setLevel = useTutorialStore((state) => state.setLevel);
   const resetProgress = useTutorialStore((state) => state.reset);
-  const closeTutorial = useTutorialStore((state) => state.close);
+  const isHidden = useTutorialStore((state) => state.isHidden);
+  const showTutorial = useTutorialStore((state) => state.show);
+  const hideTutorial = useTutorialStore((state) => state.hide);
   const activeTabId = useCanvasStore((state) => state.activeTabId);
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
@@ -47,6 +49,20 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
   const currentObjectiveKey = `${activeProblemId ?? ""}:${level?.id ?? ""}:${currentStep?.id ?? ""}`;
 
   if (!tutorial || !progress || activeTabId !== tabId || !level) return null;
+
+  if (isHidden) {
+    return (
+      <button
+        type="button"
+        onClick={showTutorial}
+        aria-label={`Show ${problemTitle} tutorial`}
+        className="absolute bottom-3 left-1/2 z-20 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-cyan-500/30 bg-zinc-950/95 px-3 py-2 text-xs font-medium text-cyan-200 shadow-xl backdrop-blur transition-colors hover:border-cyan-400/50 hover:bg-zinc-900"
+      >
+        <BookOpen className="h-3.5 w-3.5" />
+        Show tutorial
+      </button>
+    );
+  }
 
   const levelIndex = LEVEL_ORDER.indexOf(progress.currentLevel);
   const unlocked = new Set<TutorialLevelId>(["low"]);
@@ -125,7 +141,7 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
         <button type="button" onClick={() => setResetConfirmOpen(true)} className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200" aria-label="Restart tutorial from blank canvas" title="Restart from blank canvas">
           <RotateCcw className="h-3.5 w-3.5" />
         </button>
-        <button type="button" onClick={closeTutorial} className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200" aria-label="Close tutorial coach">
+        <button type="button" onClick={hideTutorial} className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200" aria-label="Hide tutorial coach" title="Hide tutorial">
           <X className="h-3.5 w-3.5" />
         </button>
       </header>

@@ -11,13 +11,15 @@ export interface TutorialProgress {
 
 interface TutorialState {
   activeProblemId: string | null;
+  isHidden: boolean;
   progressByProblem: Record<string, TutorialProgress>;
   start: (problemId: string) => void;
+  show: () => void;
+  hide: () => void;
   setLevel: (problemId: string, level: TutorialLevelId) => void;
   completeStep: (problemId: string, stepId: string) => void;
   recordSimulation: (problemId: string, proof: TutorialSimulationProof) => void;
   reset: (problemId: string) => void;
-  close: () => void;
 }
 
 const emptyProgress = (): TutorialProgress => ({
@@ -29,15 +31,19 @@ export const useTutorialStore = create<TutorialState>()(
   persist(
     (set) => ({
       activeProblemId: null,
+      isHidden: false,
       progressByProblem: {},
       start: (problemId) =>
         set((state) => ({
           activeProblemId: problemId,
+          isHidden: false,
           progressByProblem: {
             ...state.progressByProblem,
             [problemId]: state.progressByProblem[problemId] ?? emptyProgress(),
           },
         })),
+      show: () => set({ isHidden: false }),
+      hide: () => set({ isHidden: true }),
       setLevel: (problemId, level) =>
         set((state) => ({
           progressByProblem: {
@@ -79,7 +85,6 @@ export const useTutorialStore = create<TutorialState>()(
             [problemId]: emptyProgress(),
           },
         })),
-      close: () => set({ activeProblemId: null }),
     }),
     {
       name: "systemsim-tutorial-progress",
@@ -89,6 +94,7 @@ export const useTutorialStore = create<TutorialState>()(
       migrate: (state) => state as TutorialState,
       partialize: (state) => ({
         activeProblemId: state.activeProblemId,
+        isHidden: state.isHidden,
         progressByProblem: state.progressByProblem,
       }) as TutorialState,
     },
