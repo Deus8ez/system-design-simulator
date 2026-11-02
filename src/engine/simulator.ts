@@ -1,6 +1,6 @@
 import type { Node, Edge } from "@xyflow/react";
 import type { ComponentNodeData } from "@/store/canvasStore";
-import type { ComponentFault, NodeMetrics, NodeStatus, RequestProfile, SimulationResult } from "@/types/simulation";
+import type { ComponentFault, NodeMetrics, NodeStatus, QueueTopicBacklogEstimate, RequestProfile, SimulationResult } from "@/types/simulation";
 import type { DatabaseTable, EndpointDefinition, GatewayRouteDefinition, QueueConfiguration, RateLimiterConfiguration } from "@/types/component";
 import {
   UTILIZATION_WARNING,
@@ -34,6 +34,8 @@ function getSustainedRateLimitQPS(config: RateLimiterConfiguration | undefined):
 interface TrafficAllocation {
   qps: number;
   workQPS: number;
+  databaseReadWorkQPS?: number;
+  databaseWriteWorkQPS?: number;
   successQPS?: number;
   failedQPS?: number;
 }
@@ -284,6 +286,26 @@ export function runSimulation(
   for (const node of nodes) {
     const baseCapacity =
       sanitizeMaxQPS(node.data.maxQPS) * sanitizeReplicas(node.data.replicas);
+    if (["sql-db", "nosql-db", "timeseries-db"].includes(node.data.componentId)) {
+      const tables = Array.isArray(node.data.tables) ? node.data.tables as DatabaseTable[] : [];
+      for (const table of tables) {
+        const partitioning = table.partitioning;
+        if (
+          partitioning?.strategy !== "hash" ||
+          !Number.isInteger(partitioning.shardCount) || partitioning.shardCount < 1 ||
+          !Number.isFinite(partitioning.hotKeyTrafficShare) ||
+          partitioning.hotKeyTrafficShare < 0 || partitioning.hotKeyTrafficShare > 1
+        ) continue;
+        const uniformShare = 1 / partitioning.shardCount;
+        const hottestShardShare = partitioning.hotKeyTrafficShare +
+          (1 - partitioning.hotKeyTrafficShare) / partitioning.shardCount;
+        if (hottestShardShare > uniformShare * 1.5) {
+          warnings.push(
+            `${node.data.label} table "${table.name}" hash-partition estimate: the shard containing the hottest key is expected to receive about ${(hottestShardShare * 100).toFixed(1)}% of table traffic versus ${(uniformShare * 100).toFixed(1)}% under uniform keys (key ${partitioning.keyColumn}, ${partitioning.shardCount} shards). This is an input-based skew estimate; database throughput is unchanged.`
+          );
+        }
+      }
+    }
     const fault = faults[node.id];
     const effectiveCapacity = fault?.mode === "down"
       ? 0
@@ -348,6 +370,9 @@ export function runSimulation(
   const incomingWorkQPS = new Map<string, number>();
   const incomingSuccessQPS = new Map<string, number>();
   const incomingFailedQPS = new Map<string, number>();
+  const incomingDatabaseReadWorkQPS = new Map<string, number>();
+  const incomingDatabaseWriteWorkQPS = new Map<string, number>();
+  const databaseTableWorkByNode = new Map<string, Map<string, { readWorkQPS: number; writeWorkQPS: number }>>();
   const qpsPerEntry = entryNodes.length > 0 ? requestsPerSec / entryNodes.length : 0;
   for (const entry of entryNodes) {
     incomingQPS.set(entry.id, qpsPerEntry);
@@ -403,6 +428,72 @@ export function runSimulation(
     }
     deliveredQPS.set(nodeId, delivered);
 
+    const tableWork = databaseTableWorkByNode.get(nodeId);
+    const partitionWorkEstimates = (Array.isArray(data.tables) ? data.tables as DatabaseTable[] : []).flatMap((table) => {
+      const partitioning = table.partitioning;
+      const work = tableWork?.get(table.name);
+      if (
+        !partitioning ||
+        partitioning.strategy !== "hash" ||
+        !Number.isInteger(partitioning.shardCount) || partitioning.shardCount < 1 ||
+        !Number.isFinite(partitioning.hotKeyTrafficShare) ||
+        partitioning.hotKeyTrafficShare < 0 || partitioning.hotKeyTrafficShare > 1 ||
+        !work
+      ) return [];
+      const totalWorkQPS = work.readWorkQPS + work.writeWorkQPS;
+      if (totalWorkQPS <= 0) return [];
+      const uniformShardShare = 1 / partitioning.shardCount;
+      const hotShardShare = partitioning.hotKeyTrafficShare +
+        (1 - partitioning.hotKeyTrafficShare) / partitioning.shardCount;
+      const estimatedHotShardWorkQPS = totalWorkQPS * hotShardShare;
+      const estimatedUniformShardWorkQPS = totalWorkQPS * uniformShardShare;
+      const perShardCapacity = partitioning.estimatedWorkCapacityPerShard;
+      const hasCapacity = typeof perShardCapacity === "number" && Number.isFinite(perShardCapacity) && perShardCapacity > 0;
+      const estimatedHotShardUtilization = hasCapacity ? estimatedHotShardWorkQPS / perShardCapacity : undefined;
+      if (estimatedHotShardUtilization !== undefined && estimatedHotShardUtilization > 1) {
+        warnings.push(
+          `${data.label} table "${table.name}" estimates hot-shard work at ${Math.ceil(estimatedHotShardWorkQPS)} work/sec, above the configured ${Math.ceil(perShardCapacity as number)} work/sec per-shard capacity. This is a directional estimate; aggregate database throughput is unchanged.`
+        );
+      }
+      return [{
+        tableName: table.name,
+        modeledReadWorkQPS: work.readWorkQPS,
+        modeledWriteWorkQPS: work.writeWorkQPS,
+        estimatedHotShardWorkQPS,
+        estimatedUniformShardWorkQPS,
+        ...(estimatedHotShardUtilization === undefined ? {} : { estimatedHotShardUtilization }),
+      }];
+    });
+    const databaseReadWorkQPS = incomingDatabaseReadWorkQPS.get(nodeId) ?? 0;
+    const databaseWriteWorkQPS = incomingDatabaseWriteWorkQPS.get(nodeId) ?? 0;
+    const replicationEstimate = data.databaseReplicationEstimate;
+    const configuredReadReplicaShare = replicationEstimate?.estimatedReadTrafficToReplicasShare;
+    const validReadReplicaShare = typeof configuredReadReplicaShare === "number" &&
+      Number.isFinite(configuredReadReplicaShare) && configuredReadReplicaShare >= 0 && configuredReadReplicaShare <= 1
+      ? configuredReadReplicaShare
+      : undefined;
+    const assumedReadReplicaShare = validReadReplicaShare ?? 1;
+    const estimatedReadReplicaReadWorkQPS = databaseReadWorkQPS * assumedReadReplicaShare;
+    const estimatedPrimaryDatabaseWorkQPS = databaseWriteWorkQPS +
+      databaseReadWorkQPS * (1 - assumedReadReplicaShare);
+    const estimatedPrimaryDatabaseWorkCapacity = sanitizeMaxQPS(data.maxQPS);
+    const estimatedReplicationLagMs = replicationEstimate?.estimatedReplicationLagMs;
+    const maximumToleratedReadStalenessMs = replicationEstimate?.maximumToleratedReadStalenessMs;
+    if (
+      replicationEstimate &&
+      Number.isInteger(replicationEstimate.estimatedReadReplicaCount) &&
+      replicationEstimate.estimatedReadReplicaCount > 0 &&
+      assumedReadReplicaShare > 0 &&
+      databaseReadWorkQPS > 0 &&
+      typeof estimatedReplicationLagMs === "number" && Number.isFinite(estimatedReplicationLagMs) && estimatedReplicationLagMs >= 0 &&
+      typeof maximumToleratedReadStalenessMs === "number" && Number.isFinite(maximumToleratedReadStalenessMs) && maximumToleratedReadStalenessMs >= 0 &&
+      estimatedReplicationLagMs > maximumToleratedReadStalenessMs
+    ) {
+      warnings.push(
+        `${data.label} read-copy freshness estimate: the assumed ${Math.round(assumedReadReplicaShare * 100)}% read share has ${estimatedReplicationLagMs} ms estimated lag, above the ${maximumToleratedReadStalenessMs} ms scenario budget. This is an input-based risk warning only; reads are not routed and freshness is not simulated.`
+      );
+    }
+
     nodeMetrics.set(nodeId, {
       nodeId,
       incomingQPS: incoming,
@@ -412,6 +503,32 @@ export function runSimulation(
       status,
       isBottleneck,
       failedQPS: failedQPS + capacityRejectedQPS,
+      ...(partitionWorkEstimates.length > 0 ? { estimatedDatabasePartitionWork: partitionWorkEstimates } : {}),
+      ...(data.componentId === "sql-db" || data.componentId === "nosql-db" || data.componentId === "timeseries-db"
+        ? {
+            databaseReadWorkQPS,
+            databaseWriteWorkQPS,
+            ...(typeof data.databaseReplicationEstimate?.estimatedReadReplicaCount === "number"
+              && Number.isInteger(data.databaseReplicationEstimate.estimatedReadReplicaCount)
+              && data.databaseReplicationEstimate.estimatedReadReplicaCount > 0
+              ? {
+                  estimatedReadReplicaReadWorkQPS,
+                  estimatedPrimaryDatabaseWorkQPS,
+                  estimatedPrimaryDatabaseWorkCapacity,
+                  estimatedPrimaryDatabaseUtilization: estimatedPrimaryDatabaseWorkCapacity > 0
+                    ? estimatedPrimaryDatabaseWorkQPS / estimatedPrimaryDatabaseWorkCapacity
+                    : estimatedPrimaryDatabaseWorkQPS > 0 ? 2 : 0,
+                  estimatedReadReplicaWorkCapacity:
+                    data.databaseReplicationEstimate.estimatedReadReplicaCount * sanitizeMaxQPS(data.maxQPS),
+                  estimatedReadReplicaUtilization:
+                    data.databaseReplicationEstimate.estimatedReadReplicaCount * sanitizeMaxQPS(data.maxQPS) > 0
+                      ? estimatedReadReplicaReadWorkQPS /
+                        (data.databaseReplicationEstimate.estimatedReadReplicaCount * sanitizeMaxQPS(data.maxQPS))
+                      : estimatedReadReplicaReadWorkQPS > 0 ? 2 : 0,
+                }
+              : {}),
+          }
+        : {}),
     });
     return delivered;
   };
@@ -558,9 +675,25 @@ export function runSimulation(
             result.set(targetId, {
               qps: current.qps + operationQPS,
               workQPS: current.workQPS + operationQPS * workPerRequest,
+              databaseReadWorkQPS: (current.databaseReadWorkQPS ?? 0) +
+                (step.kind === "database-read" ? operationQPS * workPerRequest : 0),
+              databaseWriteWorkQPS: (current.databaseWriteWorkQPS ?? 0) +
+                (step.kind === "database-write" ? operationQPS * workPerRequest : 0),
               successQPS: (current.successQPS ?? current.qps) + operationQPS * (1 - operationFailureRate),
               failedQPS: (current.failedQPS ?? 0) + operationQPS * operationFailureRate,
             });
+            if (step.kind === "database-read" || step.kind === "database-write") {
+              const tableName = step.target?.split(".")[0]?.trim();
+              if (tableName) {
+                const tableWork = databaseTableWorkByNode.get(targetId) ?? new Map<string, { readWorkQPS: number; writeWorkQPS: number }>();
+                const currentTableWork = tableWork.get(tableName) ?? { readWorkQPS: 0, writeWorkQPS: 0 };
+                tableWork.set(tableName, {
+                  readWorkQPS: currentTableWork.readWorkQPS + (step.kind === "database-read" ? operationQPS * workPerRequest : 0),
+                  writeWorkQPS: currentTableWork.writeWorkQPS + (step.kind === "database-write" ? operationQPS * workPerRequest : 0),
+                });
+                databaseTableWorkByNode.set(targetId, tableWork);
+              }
+            }
             if (
               step.kind === "publish-event"
               && nodeMap.get(targetId)?.data.componentId === "message-queue"
@@ -725,6 +858,8 @@ export function runSimulation(
       incomingWorkQPS.set(childId, (incomingWorkQPS.get(childId) ?? 0) + allocation.workQPS);
       incomingSuccessQPS.set(childId, (incomingSuccessQPS.get(childId) ?? 0) + (allocation.successQPS ?? allocation.qps));
       incomingFailedQPS.set(childId, (incomingFailedQPS.get(childId) ?? 0) + (allocation.failedQPS ?? 0));
+      incomingDatabaseReadWorkQPS.set(childId, (incomingDatabaseReadWorkQPS.get(childId) ?? 0) + (allocation.databaseReadWorkQPS ?? 0));
+      incomingDatabaseWriteWorkQPS.set(childId, (incomingDatabaseWriteWorkQPS.get(childId) ?? 0) + (allocation.databaseWriteWorkQPS ?? 0));
     }
   };
 
@@ -750,6 +885,8 @@ export function runSimulation(
       incomingWorkQPS.set(childId, (incomingWorkQPS.get(childId) ?? 0) + allocation.workQPS);
       incomingSuccessQPS.set(childId, (incomingSuccessQPS.get(childId) ?? 0) + (allocation.successQPS ?? allocation.qps));
       incomingFailedQPS.set(childId, (incomingFailedQPS.get(childId) ?? 0) + (allocation.failedQPS ?? 0));
+      incomingDatabaseReadWorkQPS.set(childId, (incomingDatabaseReadWorkQPS.get(childId) ?? 0) + (allocation.databaseReadWorkQPS ?? 0));
+      incomingDatabaseWriteWorkQPS.set(childId, (incomingDatabaseWriteWorkQPS.get(childId) ?? 0) + (allocation.databaseWriteWorkQPS ?? 0));
 
       // Decrement in-degree; enqueue when all predecessors processed
       const newDeg = (remaining.get(childId) ?? 1) - 1;
@@ -832,6 +969,8 @@ export function runSimulation(
         incomingWorkQPS.set(childId, (incomingWorkQPS.get(childId) ?? 0) + allocation.workQPS);
         incomingSuccessQPS.set(childId, (incomingSuccessQPS.get(childId) ?? 0) + (allocation.successQPS ?? allocation.qps));
         incomingFailedQPS.set(childId, (incomingFailedQPS.get(childId) ?? 0) + (allocation.failedQPS ?? 0));
+        incomingDatabaseReadWorkQPS.set(childId, (incomingDatabaseReadWorkQPS.get(childId) ?? 0) + (allocation.databaseReadWorkQPS ?? 0));
+        incomingDatabaseWriteWorkQPS.set(childId, (incomingDatabaseWriteWorkQPS.get(childId) ?? 0) + (allocation.databaseWriteWorkQPS ?? 0));
         if (cycleSet.has(childId)) cycleQueue.push(childId);
       }
     };
@@ -906,6 +1045,7 @@ export function runSimulation(
     const queueConfig = node.data.queueConfig as QueueConfiguration | undefined;
     const topicRates = queueTopicAcceptedQPS.get(node.id);
     let processedQPS: number;
+    let topicBacklogEstimates: QueueTopicBacklogEstimate[] | undefined;
     if (topicRates && Array.isArray(queueConfig?.subscriptions)) {
       const configuredTopicNames = new Set(
         Array.isArray(queueConfig.topics)
@@ -919,22 +1059,69 @@ export function runSimulation(
           : 0;
       };
       let topicProcessedQPS = 0;
+      const processedQPSByTopic = new Map<string, number>();
       for (const [topicName, topicQPS] of topicRates) {
         if (!configuredTopicNames.has(topicName) || topicQPS <= 0) continue;
         const subscribers = [...new Set(queueConfig.subscriptions
           .filter((subscription) => subscription?.topicName === topicName)
           .map((subscription) => subscription.consumerNodeId)
           .filter((consumerId) => typeof consumerId === "string" && consumers.includes(consumerId)))];
-        if (subscribers.length === 0) continue;
+        if (subscribers.length === 0) {
+          processedQPSByTopic.set(topicName, 0);
+          continue;
+        }
+        let estimatedTopicProcessedQPS = 0;
         if (queueMode === "competing") {
           const sharePerSubscriber = topicQPS / subscribers.length;
-          topicProcessedQPS += Math.min(
+          const subscriberProcessedQPS = Math.min(
             topicQPS,
             subscribers.reduce((sum, consumerId) => sum + sharePerSubscriber * consumerCapacityRatio(consumerId), 0)
           );
+          const topicConfig = queueConfig.topics?.find((topic) => topic.name === topicName);
+          const partitionCount = topicConfig?.partitionCount;
+          if (Number.isInteger(partitionCount) && (partitionCount as number) > 0) {
+            const replicaSlots = subscribers.reduce(
+              (sum, consumerId) => sum + sanitizeReplicas(nodeMap.get(consumerId)?.data.replicas),
+              0
+            );
+            const consumerGroupCapacity = subscribers.reduce(
+              (sum, consumerId) => sum + (capacity.get(consumerId) ?? 0),
+              0
+            );
+            const uniformPartitionCapacity = consumerGroupCapacity * Math.min(1, (partitionCount as number) / replicaSlots);
+            const hotPartitionShare = topicConfig?.estimatedHotPartitionTrafficShare;
+            const hasValidHotPartitionShare = typeof hotPartitionShare === "number" &&
+              Number.isFinite(hotPartitionShare) &&
+              hotPartitionShare >= 1 / (partitionCount as number) &&
+              hotPartitionShare <= 1;
+            const skewLimitedCapacity = hasValidHotPartitionShare
+              ? Math.min(uniformPartitionCapacity, consumerGroupCapacity / replicaSlots / hotPartitionShare)
+              : uniformPartitionCapacity;
+            const partitionCapacity = skewLimitedCapacity;
+            estimatedTopicProcessedQPS = Math.min(subscriberProcessedQPS, partitionCapacity);
+            if ((partitionCount as number) < replicaSlots && topicQPS > partitionCapacity) {
+              warnings.push(
+                `Topic "${topicName}" has ${partitionCount} partitions for ${replicaSlots} competing-consumer replica slots; the aggregate backlog-drain estimate is limited by partition parallelism.`
+              );
+            }
+            if (
+              hasValidHotPartitionShare &&
+              skewLimitedCapacity < uniformPartitionCapacity &&
+              subscriberProcessedQPS > skewLimitedCapacity &&
+              topicQPS > skewLimitedCapacity
+            ) {
+              warnings.push(
+                `Topic "${topicName}" estimates ${(hotPartitionShare * 100).toFixed(1)}% of traffic on its busiest partition; this directional skew estimate limits competing-consumer backlog drain to about ${Math.floor(skewLimitedCapacity)} messages/sec.`
+              );
+            }
+          } else {
+            estimatedTopicProcessedQPS = subscriberProcessedQPS;
+          }
         } else {
-          topicProcessedQPS += topicQPS * Math.min(...subscribers.map(consumerCapacityRatio));
+          estimatedTopicProcessedQPS = topicQPS * Math.min(...subscribers.map(consumerCapacityRatio));
         }
+        processedQPSByTopic.set(topicName, estimatedTopicProcessedQPS);
+        topicProcessedQPS += estimatedTopicProcessedQPS;
       }
 
       const legacyQPS = queueLegacyAcceptedQPS.get(node.id) ?? 0;
@@ -952,6 +1139,67 @@ export function runSimulation(
           ? legacyQPS * Math.min(...consumers.map(consumerCapacityRatio))
           : 0;
       processedQPS = Math.min(acceptedQPS, topicProcessedQPS + legacyProcessedQPS);
+      topicBacklogEstimates = [...topicRates.entries()].flatMap(([topicName, acceptedMessagesPerSec]) => {
+        if (!configuredTopicNames.has(topicName) || acceptedMessagesPerSec <= 0) return [];
+        const estimatedProcessedMessagesPerSec = processedQPSByTopic.get(topicName) ?? 0;
+        const estimatedBacklogGrowthPerSec = Math.max(0, acceptedMessagesPerSec - estimatedProcessedMessagesPerSec);
+        const averageMessageSizeBytes = queueConfig?.topics?.find((topic) => topic.name === topicName)?.estimatedAverageMessageSizeBytes;
+        const estimatedBacklogPayloadBytes = typeof averageMessageSizeBytes === "number" &&
+          Number.isFinite(averageMessageSizeBytes) && averageMessageSizeBytes > 0
+          ? estimatedBacklogGrowthPerSec * sustainedDurationSec * averageMessageSizeBytes
+          : undefined;
+        const topicConfig = queueConfig?.topics?.find((topic) => topic.name === topicName);
+        const failureRate = topicConfig?.estimatedFailureRatePerAttempt;
+        const maxRetries = topicConfig?.maxDeliveryRetries;
+        let retryEstimates: Pick<QueueTopicBacklogEstimate,
+          "estimatedDeliveryAttemptsPerSec" | "estimatedRetryAttemptsPerSec" |
+          "estimatedSuccessfulDeliveriesPerSec" | "estimatedExhaustedDeliveriesPerSec" |
+          "estimatedRetryWaitMsPerDelivery"> | undefined;
+        if (
+          typeof failureRate === "number" && Number.isFinite(failureRate) && failureRate >= 0 && failureRate <= 1 &&
+          Number.isInteger(maxRetries) && typeof maxRetries === "number" && maxRetries >= 0 && maxRetries <= 5
+        ) {
+          let attemptsPerDelivery = 0;
+          for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+            attemptsPerDelivery += failureRate ** attempt;
+          }
+          const exhaustedProbability = failureRate ** (maxRetries + 1);
+          const estimatedDeliveryAttemptsPerSec = estimatedProcessedMessagesPerSec * attemptsPerDelivery;
+          const estimatedRetryAttemptsPerSec = estimatedProcessedMessagesPerSec * (attemptsPerDelivery - 1);
+          const estimatedSuccessfulDeliveriesPerSec = estimatedProcessedMessagesPerSec * (1 - exhaustedProbability);
+          const estimatedExhaustedDeliveriesPerSec = estimatedProcessedMessagesPerSec * exhaustedProbability;
+          const retryWaitMs = topicConfig?.estimatedRetryBackoffMs;
+          const estimatedRetryWaitMsPerDelivery = typeof retryWaitMs === "number" && Number.isFinite(retryWaitMs) && retryWaitMs >= 0
+            ? retryWaitMs * Array.from({ length: maxRetries }, (_, index) => failureRate ** (index + 1)).reduce((sum, probability) => sum + probability, 0)
+            : undefined;
+          if ([
+            estimatedDeliveryAttemptsPerSec,
+            estimatedRetryAttemptsPerSec,
+            estimatedSuccessfulDeliveriesPerSec,
+            estimatedExhaustedDeliveriesPerSec,
+            ...(estimatedRetryWaitMsPerDelivery === undefined ? [] : [estimatedRetryWaitMsPerDelivery]),
+          ].every(Number.isFinite)) {
+            retryEstimates = {
+              estimatedDeliveryAttemptsPerSec,
+              estimatedRetryAttemptsPerSec,
+              estimatedSuccessfulDeliveriesPerSec,
+              estimatedExhaustedDeliveriesPerSec,
+              ...(estimatedRetryWaitMsPerDelivery === undefined ? {} : { estimatedRetryWaitMsPerDelivery }),
+            };
+          }
+        }
+        return [{
+          topicName,
+          acceptedMessagesPerSec,
+          estimatedProcessedMessagesPerSec,
+          estimatedBacklogGrowthPerSec,
+          estimatedBacklogDepth: estimatedBacklogGrowthPerSec * sustainedDurationSec,
+          ...(estimatedBacklogPayloadBytes !== undefined && Number.isFinite(estimatedBacklogPayloadBytes)
+            ? { estimatedBacklogPayloadBytes }
+            : {}),
+          ...(retryEstimates ?? {}),
+        }];
+      });
     } else {
       processedQPS = queueMode === "competing"
         ? Math.min(acceptedQPS, consumerDelivered.reduce((sum, qps) => sum + qps, 0))
@@ -965,6 +1213,31 @@ export function runSimulation(
 
     metric.queueBacklogQPS = backlogGrowthQPS;
     metric.queueDepth = backlogGrowthQPS * sustainedDurationSec;
+    if (topicBacklogEstimates && topicBacklogEstimates.length > 0) {
+      metric.estimatedQueueTopicBacklog = topicBacklogEstimates;
+    }
+    if (topicRates && Array.isArray(queueConfig?.topics)) {
+      const topicStorage = queueConfig.topics.flatMap((topic) => {
+        const acceptedMessagesPerSec = topicRates.get(topic.name) ?? 0;
+        const sizeBytes = topic.estimatedAverageMessageSizeBytes;
+        const retentionHours = topic.retentionHours;
+        if (
+          acceptedMessagesPerSec <= 0 ||
+          typeof sizeBytes !== "number" || !Number.isFinite(sizeBytes) || sizeBytes <= 0 ||
+          typeof retentionHours !== "number" || !Number.isFinite(retentionHours) || retentionHours <= 0
+        ) return [];
+        const estimatedRetainedPayloadBytes = acceptedMessagesPerSec * sizeBytes * retentionHours * 3600;
+        if (!Number.isFinite(estimatedRetainedPayloadBytes)) return [];
+        return [{
+          topicName: topic.name,
+          acceptedMessagesPerSec,
+          estimatedAverageMessageSizeBytes: sizeBytes,
+          retentionHours,
+          estimatedRetainedPayloadBytes,
+        }];
+      });
+      if (topicStorage.length > 0) metric.estimatedQueueTopicStorage = topicStorage;
+    }
     if (backlogGrowthQPS > 0) {
       warnings.push(
         `${node.data.label} backlog grows by ${Math.ceil(backlogGrowthQPS)} messages/sec (about ${Math.ceil(metric.queueDepth)} messages over ${sustainedDurationSec}s).`

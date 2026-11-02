@@ -12,7 +12,7 @@ import {
 } from "@xyflow/react";
 import { useSimulationStore } from "./simulationStore";
 import { safeLocalStorage } from "./safeStorage";
-import type { CacheConfiguration, DatabaseTable, EndpointDefinition, GatewayRouteDefinition, QueueConfiguration, QueueDeliveryMode, RateLimiterConfiguration } from "@/types/component";
+import type { CacheConfiguration, DatabaseReplicationEstimate, DatabaseTable, EndpointDefinition, GatewayRouteDefinition, QueueConfiguration, QueueDeliveryMode, RateLimiterConfiguration } from "@/types/component";
 
 export interface ComponentNodeData {
   componentId: string;
@@ -26,6 +26,7 @@ export interface ComponentNodeData {
   endpoints?: EndpointDefinition[];
   routes?: GatewayRouteDefinition[];
   cacheConfig?: CacheConfiguration;
+  databaseReplicationEstimate?: DatabaseReplicationEstimate;
   tables?: DatabaseTable[];
   queueConfig?: QueueConfiguration;
   queueDeliveryMode?: QueueDeliveryMode;

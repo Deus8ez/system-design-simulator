@@ -3,6 +3,8 @@ import type { ComponentNodeData, CustomEdgeData } from "@/store/canvasStore";
 import type {
   CacheConfiguration,
   CacheEvictionPolicy,
+  DatabasePartitioningConfiguration,
+  DatabaseReplicationEstimate,
   DatabaseTable,
   EndpointDefinition,
   EndpointFieldDefinition,
@@ -226,6 +228,57 @@ function report(diagnostics: DesignDiagnostic[], diagnostic: DesignDiagnostic): 
 }
 
 function validateSchema(node: Node<ComponentNodeData>, diagnostics: DesignDiagnostic[]): void {
+  const replicationEstimate = node.data.databaseReplicationEstimate as DatabaseReplicationEstimate | undefined;
+  if (
+    replicationEstimate &&
+    (!Number.isInteger(replicationEstimate.estimatedReadReplicaCount) || replicationEstimate.estimatedReadReplicaCount < 1)
+  ) {
+    report(diagnostics, {
+      code: "DB_READ_REPLICA_ESTIMATE_INVALID",
+      severity: "error",
+      message: `${node.data.label} estimated read replica count must be a positive integer.`,
+      remediation: "Set the estimated read replicas to a positive whole number or clear the estimate.",
+      nodeId: node.id,
+    });
+  }
+  if (
+    replicationEstimate?.estimatedReadTrafficToReplicasShare !== undefined &&
+    (!Number.isFinite(replicationEstimate.estimatedReadTrafficToReplicasShare) ||
+      replicationEstimate.estimatedReadTrafficToReplicasShare < 0 ||
+      replicationEstimate.estimatedReadTrafficToReplicasShare > 1)
+  ) {
+    report(diagnostics, {
+      code: "DB_READ_REPLICA_SHARE_INVALID",
+      severity: "error",
+      message: `${node.data.label} estimated read work share for additional copies must be between 0 and 1.`,
+      remediation: "Set the estimated read share to a percentage from 0% to 100%, or clear the estimate.",
+      nodeId: node.id,
+    });
+  }
+  if (
+    replicationEstimate?.estimatedReplicationLagMs !== undefined &&
+    (!Number.isFinite(replicationEstimate.estimatedReplicationLagMs) || replicationEstimate.estimatedReplicationLagMs < 0)
+  ) {
+    report(diagnostics, {
+      code: "DB_REPLICATION_LAG_ESTIMATE_INVALID",
+      severity: "error",
+      message: `${node.data.label} estimated replication lag must be a finite, non-negative number of milliseconds.`,
+      remediation: "Set the assumed replication lag to zero or a positive number of milliseconds, or clear it.",
+      nodeId: node.id,
+    });
+  }
+  if (
+    replicationEstimate?.maximumToleratedReadStalenessMs !== undefined &&
+    (!Number.isFinite(replicationEstimate.maximumToleratedReadStalenessMs) || replicationEstimate.maximumToleratedReadStalenessMs < 0)
+  ) {
+    report(diagnostics, {
+      code: "DB_READ_STALENESS_BUDGET_INVALID",
+      severity: "error",
+      message: `${node.data.label} maximum tolerated read staleness must be a finite, non-negative number of milliseconds.`,
+      remediation: "Set the read-staleness budget to zero or a positive number of milliseconds, or clear it.",
+      nodeId: node.id,
+    });
+  }
   const tableNames = new Set<string>();
   for (const table of getTables(node)) {
     if (!table.name.trim() || tableNames.has(table.name)) {
@@ -258,6 +311,64 @@ function validateSchema(node: Node<ComponentNodeData>, diagnostics: DesignDiagno
         });
       }
       columnNames.add(column.name);
+    }
+
+    const partitioning = table.partitioning as DatabasePartitioningConfiguration | undefined;
+    if (partitioning !== undefined) {
+      if (partitioning.strategy !== "hash") {
+        report(diagnostics, {
+          code: "DB_PARTITION_STRATEGY_INVALID",
+          severity: "error",
+          message: `Table "${table.name}" uses an unsupported partition strategy.`,
+          remediation: "Choose hash partitioning or remove the partition settings.",
+          nodeId: node.id,
+          tableName: table.name,
+        });
+      }
+      if (!columnNames.has(partitioning.keyColumn)) {
+        report(diagnostics, {
+          code: "DB_PARTITION_KEY_MISSING",
+          severity: "error",
+          message: `Table "${table.name}" partition key "${partitioning.keyColumn}" is not a defined column.`,
+          remediation: "Choose an existing table column as the partition key.",
+          nodeId: node.id,
+          tableName: table.name,
+          columnName: partitioning.keyColumn,
+        });
+      }
+      if (!Number.isInteger(partitioning.shardCount) || partitioning.shardCount < 1) {
+        report(diagnostics, {
+          code: "DB_PARTITION_COUNT_INVALID",
+          severity: "error",
+          message: `Table "${table.name}" shard count must be a positive integer.`,
+          remediation: "Set the shard count to a positive whole number.",
+          nodeId: node.id,
+          tableName: table.name,
+        });
+      }
+      if (!Number.isFinite(partitioning.hotKeyTrafficShare) || partitioning.hotKeyTrafficShare < 0 || partitioning.hotKeyTrafficShare > 1) {
+        report(diagnostics, {
+          code: "DB_PARTITION_HOT_KEY_SHARE_INVALID",
+          severity: "error",
+          message: `Table "${table.name}" hottest-key traffic share must be between 0 and 1.`,
+          remediation: "Set the estimated hottest-key share between 0% and 100%.",
+          nodeId: node.id,
+          tableName: table.name,
+        });
+      }
+      if (partitioning.estimatedWorkCapacityPerShard !== undefined &&
+        (typeof partitioning.estimatedWorkCapacityPerShard !== "number" ||
+          !Number.isFinite(partitioning.estimatedWorkCapacityPerShard) ||
+          partitioning.estimatedWorkCapacityPerShard <= 0)) {
+        report(diagnostics, {
+          code: "DB_PARTITION_WORK_CAPACITY_INVALID",
+          severity: "error",
+          message: `Table "${table.name}" estimated per-shard work capacity must be a positive finite number.`,
+          remediation: "Set a positive modeled work/s value per shard or clear the optional estimate.",
+          nodeId: node.id,
+          tableName: table.name,
+        });
+      }
     }
 
     const indexNames = new Set<string>();
@@ -408,7 +519,16 @@ function validateQueueConfig(
   }
   const topicNames = new Set<string>();
   for (const candidate of config.topics as unknown[]) {
-    const topic = candidate as { name?: unknown; retentionHours?: unknown } | null;
+    const topic = candidate as {
+      name?: unknown;
+      retentionHours?: unknown;
+      partitionCount?: unknown;
+      estimatedHotPartitionTrafficShare?: unknown;
+      estimatedAverageMessageSizeBytes?: unknown;
+      estimatedFailureRatePerAttempt?: unknown;
+      maxDeliveryRetries?: unknown;
+      estimatedRetryBackoffMs?: unknown;
+    } | null;
     if (!topic || typeof topic.name !== "string") {
       report(diagnostics, {
         code: "QUEUE_TOPIC_INVALID",
@@ -447,6 +567,116 @@ function validateQueueConfig(
         severity: "warning",
         message: `Topic "${topic.name}" retains messages for less than 24 hours.`,
         remediation: "Confirm the retention window is long enough for consumer recovery and replay.",
+        nodeId: node.id,
+        topicName: topic.name,
+      });
+    }
+    if (topic.partitionCount !== undefined && (!Number.isInteger(topic.partitionCount) || (topic.partitionCount as number) < 1)) {
+      report(diagnostics, {
+        code: "QUEUE_PARTITION_COUNT_INVALID",
+        severity: "error",
+        message: `Topic "${topic.name}" partition count must be a positive integer.`,
+        remediation: "Set the partition count to a positive whole number or clear the setting.",
+        nodeId: node.id,
+        topicName: topic.name,
+      });
+    }
+    if (topic.estimatedHotPartitionTrafficShare !== undefined) {
+      const partitionCount = topic.partitionCount;
+      if (!Number.isInteger(partitionCount) || (partitionCount as number) < 1) {
+        report(diagnostics, {
+          code: "QUEUE_HOT_PARTITION_SHARE_REQUIRES_PARTITIONS",
+          severity: "error",
+          message: `Topic "${topic.name}" needs a valid partition count to estimate hottest-partition traffic share.`,
+          remediation: "Set a positive integer partition count or clear the hottest-partition estimate.",
+          nodeId: node.id,
+          topicName: topic.name,
+        });
+      }
+      const share = topic.estimatedHotPartitionTrafficShare;
+      const belowUniform = Number.isInteger(partitionCount) && (partitionCount as number) > 0 &&
+        typeof share === "number" && share < 1 / (partitionCount as number);
+      if (typeof share !== "number" || !Number.isFinite(share) || share <= 0 || share > 1 || belowUniform) {
+        report(diagnostics, {
+          code: "QUEUE_HOT_PARTITION_SHARE_INVALID",
+          severity: "error",
+          message: `Topic "${topic.name}" hottest-partition traffic share must be between the uniform share and 100%.`,
+          remediation: "Enter a fraction greater than zero and at most 100%, no lower than 100% divided by the partition count, or clear the estimate.",
+          nodeId: node.id,
+          topicName: topic.name,
+        });
+      }
+    }
+    if (topic.estimatedAverageMessageSizeBytes !== undefined &&
+      (typeof topic.estimatedAverageMessageSizeBytes !== "number" ||
+        !Number.isFinite(topic.estimatedAverageMessageSizeBytes) ||
+        topic.estimatedAverageMessageSizeBytes <= 0)) {
+      report(diagnostics, {
+        code: "QUEUE_MESSAGE_SIZE_INVALID",
+        severity: "error",
+        message: `Topic "${topic.name}" estimated average message size must be a positive finite number of bytes.`,
+        remediation: "Enter a positive average payload size in bytes or clear the optional estimate.",
+        nodeId: node.id,
+        topicName: topic.name,
+      });
+    }
+    if ((topic.estimatedFailureRatePerAttempt === undefined) !== (topic.maxDeliveryRetries === undefined)) {
+      report(diagnostics, {
+        code: "QUEUE_RETRY_ESTIMATE_INCOMPLETE",
+        severity: "error",
+        message: `Topic "${topic.name}" needs both an assumed per-attempt failure rate and a maximum retry count for its retry estimate.`,
+        remediation: "Set both retry assumptions or clear both fields.",
+        nodeId: node.id,
+        topicName: topic.name,
+      });
+    }
+    if (topic.estimatedFailureRatePerAttempt !== undefined &&
+      (typeof topic.estimatedFailureRatePerAttempt !== "number" ||
+        !Number.isFinite(topic.estimatedFailureRatePerAttempt) ||
+        topic.estimatedFailureRatePerAttempt < 0 ||
+        topic.estimatedFailureRatePerAttempt > 1)) {
+      report(diagnostics, {
+        code: "QUEUE_RETRY_FAILURE_RATE_INVALID",
+        severity: "error",
+        message: `Topic "${topic.name}" assumed per-attempt failure rate must be between 0% and 100%.`,
+        remediation: "Enter a percentage from 0 to 100 or clear both retry assumptions.",
+        nodeId: node.id,
+        topicName: topic.name,
+      });
+    }
+    if (topic.maxDeliveryRetries !== undefined &&
+      (!Number.isInteger(topic.maxDeliveryRetries) ||
+        (topic.maxDeliveryRetries as number) < 0 ||
+        (topic.maxDeliveryRetries as number) > 5)) {
+      report(diagnostics, {
+        code: "QUEUE_RETRY_COUNT_INVALID",
+        severity: "error",
+        message: `Topic "${topic.name}" maximum delivery retries must be a whole number from 0 to 5.`,
+        remediation: "Set a retry count from 0 to 5 or clear both retry assumptions.",
+        nodeId: node.id,
+        topicName: topic.name,
+      });
+    }
+    if (topic.estimatedRetryBackoffMs !== undefined &&
+      (typeof topic.estimatedRetryBackoffMs !== "number" ||
+        !Number.isFinite(topic.estimatedRetryBackoffMs) ||
+        topic.estimatedRetryBackoffMs < 0)) {
+      report(diagnostics, {
+        code: "QUEUE_RETRY_BACKOFF_INVALID",
+        severity: "error",
+        message: `Topic "${topic.name}" estimated retry backoff must be a finite non-negative number of milliseconds.`,
+        remediation: "Enter a non-negative fixed delay in milliseconds or clear the optional estimate.",
+        nodeId: node.id,
+        topicName: topic.name,
+      });
+    }
+    if (topic.estimatedRetryBackoffMs !== undefined &&
+      (topic.estimatedFailureRatePerAttempt === undefined || topic.maxDeliveryRetries === undefined)) {
+      report(diagnostics, {
+        code: "QUEUE_RETRY_BACKOFF_REQUIRES_RETRY_ESTIMATE",
+        severity: "error",
+        message: `Topic "${topic.name}" retry backoff requires both retry-estimate assumptions.`,
+        remediation: "Configure the failure rate and retry count, or clear the backoff estimate.",
         nodeId: node.id,
         topicName: topic.name,
       });

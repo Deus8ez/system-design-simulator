@@ -450,6 +450,211 @@ test("blocks invalid queue retention and warns on short retention", () => {
   assert.ok(diagnosticCodes(shortResult).includes("QUEUE_RETENTION_SHORT"));
 });
 
+test("blocks non-positive or fractional queue partition counts", () => {
+  for (const partitionCount of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const design = makeDesign();
+    const queue = addQueueToDesign(design);
+    queue.data.queueConfig.topics[0].partitionCount = partitionCount;
+    const result = compileDesign(design.nodes, design.edges);
+    assert.equal(result.ok, false, `partitionCount=${partitionCount} should be rejected`);
+    assert.ok(diagnosticCodes(result).includes("QUEUE_PARTITION_COUNT_INVALID"));
+  }
+
+  const validDesign = makeDesign();
+  const queue = addQueueToDesign(validDesign);
+  queue.data.queueConfig.topics[0].partitionCount = 8;
+  const validResult = compileDesign(validDesign.nodes, validDesign.edges);
+  assert.equal(validResult.ok, true);
+  assert.equal(diagnosticCodes(validResult).includes("QUEUE_PARTITION_COUNT_INVALID"), false);
+});
+
+test("validates hottest-partition queue traffic estimates against partition count", () => {
+  const designForTopic = (partitionCount, estimatedHotPartitionTrafficShare) => {
+    const design = makeDesign();
+    const queue = addQueueToDesign(design);
+    queue.data.queueConfig.topics[0] = {
+      id: "topic-1",
+      name: "url-created",
+      ...(partitionCount === undefined ? {} : { partitionCount }),
+      estimatedHotPartitionTrafficShare,
+    };
+    return compileDesign(design.nodes, design.edges);
+  };
+
+  for (const [partitionCount, share] of [[4, 0], [4, -0.1], [4, 1.01], [4, 0.2]]) {
+    const result = designForTopic(partitionCount, share);
+    assert.ok(diagnosticCodes(result).includes("QUEUE_HOT_PARTITION_SHARE_INVALID"), `${partitionCount} partitions, ${share} share`);
+  }
+
+  const missingPartitionCount = designForTopic(undefined, 0.5);
+  assert.ok(diagnosticCodes(missingPartitionCount).includes("QUEUE_HOT_PARTITION_SHARE_REQUIRES_PARTITIONS"));
+
+  const uniformBoundary = designForTopic(4, 0.25);
+  assert.equal(diagnosticCodes(uniformBoundary).includes("QUEUE_HOT_PARTITION_SHARE_INVALID"), false);
+  const validSkew = designForTopic(4, 0.5);
+  assert.equal(diagnosticCodes(validSkew).includes("QUEUE_HOT_PARTITION_SHARE_INVALID"), false);
+});
+
+test("validates optional queue average message-size estimates", () => {
+  for (const sizeBytes of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "512"]) {
+    const design = makeDesign();
+    const queue = addQueueToDesign(design);
+    queue.data.queueConfig.topics[0].estimatedAverageMessageSizeBytes = sizeBytes;
+    const result = compileDesign(design.nodes, design.edges);
+    assert.ok(diagnosticCodes(result).includes("QUEUE_MESSAGE_SIZE_INVALID"), `sizeBytes=${sizeBytes}`);
+  }
+
+  const validDesign = makeDesign();
+  const queue = addQueueToDesign(validDesign);
+  queue.data.queueConfig.topics[0].estimatedAverageMessageSizeBytes = 512;
+  const result = compileDesign(validDesign.nodes, validDesign.edges);
+  assert.equal(diagnosticCodes(result).includes("QUEUE_MESSAGE_SIZE_INVALID"), false);
+});
+
+test("validates paired queue retry-estimate assumptions and their bounds", () => {
+  const designFor = (estimatedFailureRatePerAttempt, maxDeliveryRetries) => {
+    const design = makeDesign();
+    const queue = addQueueToDesign(design);
+    Object.assign(queue.data.queueConfig.topics[0], {
+      estimatedFailureRatePerAttempt,
+      maxDeliveryRetries,
+    });
+    return compileDesign(design.nodes, design.edges);
+  };
+
+  const incomplete = designFor(0.1, undefined);
+  assert.ok(diagnosticCodes(incomplete).includes("QUEUE_RETRY_ESTIMATE_INCOMPLETE"));
+  for (const failureRate of [-0.01, 1.01, Number.NaN, Number.POSITIVE_INFINITY, "0.1"]) {
+    assert.ok(diagnosticCodes(designFor(failureRate, 3)).includes("QUEUE_RETRY_FAILURE_RATE_INVALID"));
+  }
+  for (const retries of [-1, 1.5, 6, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.ok(diagnosticCodes(designFor(0.1, retries)).includes("QUEUE_RETRY_COUNT_INVALID"));
+  }
+  for (const [failureRate, retries] of [[0, 0], [1, 5], [0.1, 3]]) {
+    const result = designFor(failureRate, retries);
+    assert.equal(diagnosticCodes(result).includes("QUEUE_RETRY_FAILURE_RATE_INVALID"), false);
+    assert.equal(diagnosticCodes(result).includes("QUEUE_RETRY_COUNT_INVALID"), false);
+    assert.equal(diagnosticCodes(result).includes("QUEUE_RETRY_ESTIMATE_INCOMPLETE"), false);
+  }
+});
+
+test("validates optional fixed retry backoff assumptions", () => {
+  const designFor = (retryConfig) => {
+    const design = makeDesign();
+    const queue = addQueueToDesign(design);
+    Object.assign(queue.data.queueConfig.topics[0], retryConfig);
+    return compileDesign(design.nodes, design.edges);
+  };
+
+  for (const delayMs of [-1, Number.NaN, Number.POSITIVE_INFINITY, "250"]) {
+    assert.ok(diagnosticCodes(designFor({ estimatedFailureRatePerAttempt: 0.1, maxDeliveryRetries: 3, estimatedRetryBackoffMs: delayMs })).includes("QUEUE_RETRY_BACKOFF_INVALID"));
+  }
+  assert.ok(diagnosticCodes(designFor({ estimatedRetryBackoffMs: 250 })).includes("QUEUE_RETRY_BACKOFF_REQUIRES_RETRY_ESTIMATE"));
+  for (const delayMs of [0, 250]) {
+    const result = designFor({ estimatedFailureRatePerAttempt: 0.1, maxDeliveryRetries: 3, estimatedRetryBackoffMs: delayMs });
+    assert.equal(diagnosticCodes(result).includes("QUEUE_RETRY_BACKOFF_INVALID"), false);
+    assert.equal(diagnosticCodes(result).includes("QUEUE_RETRY_BACKOFF_REQUIRES_RETRY_ESTIMATE"), false);
+  }
+});
+
+test("validates table hash-partition keys, shard counts, strategies, and skew inputs", () => {
+  const invalidCases = [
+    [{ strategy: "hash", keyColumn: "missing", shardCount: 16, hotKeyTrafficShare: 0.2 }, "DB_PARTITION_KEY_MISSING"],
+    [{ strategy: "range", keyColumn: "shortCode", shardCount: 16, hotKeyTrafficShare: 0.2 }, "DB_PARTITION_STRATEGY_INVALID"],
+    [{ strategy: "hash", keyColumn: "shortCode", shardCount: 1.5, hotKeyTrafficShare: 0.2 }, "DB_PARTITION_COUNT_INVALID"],
+    [{ strategy: "hash", keyColumn: "shortCode", shardCount: 16, hotKeyTrafficShare: 1.1 }, "DB_PARTITION_HOT_KEY_SHARE_INVALID"],
+    [{ strategy: "hash", keyColumn: "shortCode", shardCount: 16, hotKeyTrafficShare: 0.1, estimatedWorkCapacityPerShard: 0 }, "DB_PARTITION_WORK_CAPACITY_INVALID"],
+    [{ strategy: "hash", keyColumn: "shortCode", shardCount: 16, hotKeyTrafficShare: 0.1, estimatedWorkCapacityPerShard: Number.POSITIVE_INFINITY }, "DB_PARTITION_WORK_CAPACITY_INVALID"],
+  ];
+  for (const [partitioning, expectedCode] of invalidCases) {
+    const design = makeDesign();
+    design.nodes.find(({ id }) => id === "db-1").data.tables[0].partitioning = partitioning;
+    const result = compileDesign(design.nodes, design.edges);
+    assert.equal(result.ok, false);
+    assert.ok(diagnosticCodes(result).includes(expectedCode), `Expected ${expectedCode}`);
+  }
+
+  const validDesign = makeDesign();
+  validDesign.nodes.find(({ id }) => id === "db-1").data.tables[0].partitioning = {
+    strategy: "hash",
+    keyColumn: "shortCode",
+    shardCount: 16,
+    hotKeyTrafficShare: 0.2,
+    estimatedWorkCapacityPerShard: 2000,
+  };
+  const validResult = compileDesign(validDesign.nodes, validDesign.edges);
+  assert.equal(validResult.ok, true);
+  assert.equal(diagnosticCodes(validResult).some((code) => code.startsWith("DB_PARTITION_")), false);
+});
+
+test("validates estimated read-replica count without requiring a replication topology", () => {
+  for (const estimatedReadReplicaCount of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const design = makeDesign();
+    design.nodes.find(({ id }) => id === "db-1").data.databaseReplicationEstimate = { estimatedReadReplicaCount };
+    const result = compileDesign(design.nodes, design.edges);
+    assert.equal(result.ok, false, `estimatedReadReplicaCount=${estimatedReadReplicaCount} should be rejected`);
+    assert.ok(diagnosticCodes(result).includes("DB_READ_REPLICA_ESTIMATE_INVALID"));
+  }
+
+  const validDesign = makeDesign();
+  validDesign.nodes.find(({ id }) => id === "db-1").data.databaseReplicationEstimate = { estimatedReadReplicaCount: 2 };
+  const validResult = compileDesign(validDesign.nodes, validDesign.edges);
+  assert.equal(validResult.ok, true);
+  assert.equal(diagnosticCodes(validResult).includes("DB_READ_REPLICA_ESTIMATE_INVALID"), false);
+});
+
+test("validates the estimated read-work share assigned to additional copies", () => {
+  for (const estimatedReadTrafficToReplicasShare of [-0.01, 1.01, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const design = makeDesign();
+    design.nodes.find(({ id }) => id === "db-1").data.databaseReplicationEstimate = {
+      estimatedReadReplicaCount: 2,
+      estimatedReadTrafficToReplicasShare,
+    };
+    const result = compileDesign(design.nodes, design.edges);
+    assert.equal(result.ok, false, `estimatedReadTrafficToReplicasShare=${estimatedReadTrafficToReplicasShare} should be rejected`);
+    assert.ok(diagnosticCodes(result).includes("DB_READ_REPLICA_SHARE_INVALID"));
+  }
+
+  for (const estimatedReadTrafficToReplicasShare of [0, 0.8, 1]) {
+    const design = makeDesign();
+    design.nodes.find(({ id }) => id === "db-1").data.databaseReplicationEstimate = {
+      estimatedReadReplicaCount: 2,
+      estimatedReadTrafficToReplicasShare,
+    };
+    const result = compileDesign(design.nodes, design.edges);
+    assert.equal(result.ok, true, `estimatedReadTrafficToReplicasShare=${estimatedReadTrafficToReplicasShare} should be accepted`);
+    assert.equal(diagnosticCodes(result).includes("DB_READ_REPLICA_SHARE_INVALID"), false);
+  }
+});
+
+test("validates non-negative replication-lag and read-staleness estimates", () => {
+  const cases = [
+    ["estimatedReplicationLagMs", "DB_REPLICATION_LAG_ESTIMATE_INVALID"],
+    ["maximumToleratedReadStalenessMs", "DB_READ_STALENESS_BUDGET_INVALID"],
+  ];
+  for (const [field, diagnosticCode] of cases) {
+    for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const design = makeDesign();
+      design.nodes.find(({ id }) => id === "db-1").data.databaseReplicationEstimate = {
+        estimatedReadReplicaCount: 2,
+        [field]: value,
+      };
+      const result = compileDesign(design.nodes, design.edges);
+      assert.equal(result.ok, false, `${field}=${value} should be rejected`);
+      assert.ok(diagnosticCodes(result).includes(diagnosticCode));
+    }
+    for (const value of [0, 500]) {
+      const design = makeDesign();
+      design.nodes.find(({ id }) => id === "db-1").data.databaseReplicationEstimate = {
+        estimatedReadReplicaCount: 2,
+        [field]: value,
+      };
+      const result = compileDesign(design.nodes, design.edges);
+      assert.equal(result.ok, true, `${field}=${value} should be accepted`);
+    }
+  }
+});
+
 test("accepts an explicit subscription from a configured topic to a connected consumer", () => {
   const design = makeDesign();
   const queue = addQueueToDesign(design);

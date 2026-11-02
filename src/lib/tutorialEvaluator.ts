@@ -213,6 +213,62 @@ export function evaluateTutorialObjective(
       return { complete: true, feedback: "The required data fields and lookup indexes are present." };
     }
 
+    case "database-partitioning": {
+      const databases = componentNodes(nodes, objective.databaseComponentId);
+      if (databases.length === 0) return { complete: false, feedback: `Add ${componentName(objective.databaseComponentId)}.` };
+      const table = databases.flatMap((database) => database.data.tables ?? [])
+        .find((item) => item.name.toLowerCase() === objective.tableName.toLowerCase());
+      if (!table) return { complete: false, feedback: `Add a ${objective.tableName} table to ${componentName(objective.databaseComponentId)}.` };
+      const partitioning = table.partitioning;
+      if (!partitioning) return { complete: false, feedback: `Configure hash partitioning for ${objective.tableName}.` };
+      if (partitioning.strategy !== "hash" || partitioning.keyColumn !== objective.keyColumn) {
+        return { complete: false, feedback: `Set ${objective.tableName} hash partition key to ${objective.keyColumn}.` };
+      }
+      if (!Number.isInteger(partitioning.shardCount) || partitioning.shardCount < objective.minimumShards) {
+        return { complete: false, feedback: `Set ${objective.tableName} to at least ${objective.minimumShards} shards.` };
+      }
+      if (!Number.isFinite(partitioning.hotKeyTrafficShare) || partitioning.hotKeyTrafficShare < objective.minimumHotKeyTrafficShare) {
+        return { complete: false, feedback: `Estimate the hottest ${objective.keyColumn} key at at least ${(objective.minimumHotKeyTrafficShare * 100).toFixed(0)}% of ${objective.tableName} traffic for this scenario.` };
+      }
+      if (objective.minimumEstimatedWorkCapacityPerShard !== undefined &&
+        (!Number.isFinite(partitioning.estimatedWorkCapacityPerShard) ||
+          partitioning.estimatedWorkCapacityPerShard! < objective.minimumEstimatedWorkCapacityPerShard)) {
+        return { complete: false, feedback: `Set the ${objective.tableName} estimated per-shard work capacity to at least ${objective.minimumEstimatedWorkCapacityPerShard} work/s.` };
+      }
+      return { complete: true, feedback: "The hash key, shard count, and hot-key estimate match this scenario." };
+    }
+
+    case "database-read-replicas": {
+      const databases = componentNodes(nodes, objective.databaseComponentId);
+      if (databases.length === 0) {
+        return { complete: false, feedback: `Add ${componentName(objective.databaseComponentId)}.` };
+      }
+      if (!databases.some((database) =>
+        Number.isInteger(database.data.databaseReplicationEstimate?.estimatedReadReplicaCount) &&
+        database.data.databaseReplicationEstimate!.estimatedReadReplicaCount >= objective.minimumReplicas,
+      )) {
+        return { complete: false, feedback: `Configure at least ${objective.minimumReplicas} additional read-serving copies on ${componentName(objective.databaseComponentId)}.` };
+      }
+      if (objective.requiredReadTrafficToReplicasShare !== undefined && !databases.some((database) => {
+        const share = database.data.databaseReplicationEstimate?.estimatedReadTrafficToReplicasShare ?? 1;
+        return Number.isFinite(share) && Math.abs(share - objective.requiredReadTrafficToReplicasShare!) < 1e-9;
+      })) {
+        return { complete: false, feedback: `Set the estimated read work served by additional copies to ${(objective.requiredReadTrafficToReplicasShare * 100).toFixed(0)}%.` };
+      }
+      for (const [field, expected, label] of [
+        ["estimatedReplicationLagMs", objective.requiredEstimatedReplicationLagMs, "estimated replication lag"],
+        ["maximumToleratedReadStalenessMs", objective.requiredMaximumToleratedReadStalenessMs, "maximum tolerated read staleness"],
+      ] as const) {
+        if (expected !== undefined && !databases.some((database) => {
+          const actual = database.data.databaseReplicationEstimate?.[field];
+          return typeof actual === "number" && Number.isFinite(actual) && Math.abs(actual - expected) < 1e-9;
+        })) {
+          return { complete: false, feedback: `Set the ${label} estimate to ${expected} ms.` };
+        }
+      }
+      return { complete: true, feedback: "The requested additional read-serving copy estimate is configured. This does not imply read routing or replication guarantees." };
+    }
+
     case "cache-behavior": {
       const caches = componentNodes(nodes, objective.cacheComponentId);
       if (caches.length === 0) return { complete: false, feedback: `Add a ${componentName(objective.cacheComponentId)} component.` };
@@ -262,6 +318,75 @@ export function evaluateTutorialObjective(
       }
       return { complete: true, feedback: "The queue topic and consumer subscription are configured." };
     }
+
+    case "queue-retention": {
+      const queues = componentNodes(nodes, objective.queueComponentId);
+      if (queues.length === 0) return { complete: false, feedback: `Add a ${componentName(objective.queueComponentId)}.` };
+      const topics = queues.flatMap((queue) => queue.data.queueConfig?.topics ?? [])
+        .filter((topic) => topic.name === objective.topicName);
+      if (topics.length === 0) {
+        return { complete: false, feedback: `Add topic “${objective.topicName}” to ${componentName(objective.queueComponentId)}.` };
+      }
+      if (!topics.some((topic) => Number.isFinite(topic.retentionHours) && topic.retentionHours! >= objective.minimumRetentionHours)) {
+        return { complete: false, feedback: `Set topic “${objective.topicName}” retention to at least ${objective.minimumRetentionHours} hours.` };
+      }
+      return { complete: true, feedback: `Topic “${objective.topicName}” retains messages for the requested recovery window.` };
+    }
+
+    case "queue-partitions": {
+      const queues = componentNodes(nodes, objective.queueComponentId);
+      if (queues.length === 0) return { complete: false, feedback: `Add a ${componentName(objective.queueComponentId)}.` };
+      const topics = queues.flatMap((queue) => queue.data.queueConfig?.topics ?? [])
+        .filter((topic) => topic.name === objective.topicName);
+      if (topics.length === 0) {
+        return { complete: false, feedback: `Add topic “${objective.topicName}” to ${componentName(objective.queueComponentId)}.` };
+      }
+      if (!topics.some((topic) => Number.isInteger(topic.partitionCount) && topic.partitionCount! >= objective.minimumPartitions)) {
+        return { complete: false, feedback: `Set topic “${objective.topicName}” to at least ${objective.minimumPartitions} partitions.` };
+      }
+      if (objective.minimumHotPartitionTrafficShare !== undefined && !topics.some((topic) =>
+        Number.isInteger(topic.partitionCount) && topic.partitionCount! >= objective.minimumPartitions &&
+        Number.isFinite(topic.estimatedHotPartitionTrafficShare) &&
+        topic.estimatedHotPartitionTrafficShare! >= objective.minimumHotPartitionTrafficShare!,
+      )) {
+        return { complete: false, feedback: `Estimate at least ${(objective.minimumHotPartitionTrafficShare * 100).toFixed(0)}% of “${objective.topicName}” traffic on its busiest partition.` };
+      }
+      if (objective.minimumEstimatedAverageMessageSizeBytes !== undefined && !topics.some((topic) =>
+        Number.isFinite(topic.estimatedAverageMessageSizeBytes) &&
+        topic.estimatedAverageMessageSizeBytes! >= objective.minimumEstimatedAverageMessageSizeBytes!,
+      )) {
+        return { complete: false, feedback: `Set an estimated average message size of at least ${objective.minimumEstimatedAverageMessageSizeBytes} bytes for “${objective.topicName}”.` };
+      }
+      return { complete: true, feedback: `Topic “${objective.topicName}” has the requested minimum partition count.` };
+    }
+
+    case "queue-retry-estimate": {
+      const queues = componentNodes(nodes, objective.queueComponentId);
+      if (queues.length === 0) return { complete: false, feedback: `Add a ${componentName(objective.queueComponentId)}.` };
+      const topics = queues.flatMap((queue) => queue.data.queueConfig?.topics ?? [])
+        .filter((topic) => topic.name === objective.topicName);
+      if (topics.length === 0) {
+        return { complete: false, feedback: `Add topic “${objective.topicName}” to ${componentName(objective.queueComponentId)}.` };
+      }
+      if (!topics.some((topic) =>
+        topic.estimatedFailureRatePerAttempt === objective.assumedFailureRatePerAttempt &&
+        Number.isInteger(topic.maxDeliveryRetries) &&
+        topic.maxDeliveryRetries! >= objective.minimumMaxDeliveryRetries &&
+        topic.estimatedRetryBackoffMs === objective.assumedRetryBackoffMs,
+      )) {
+        return {
+          complete: false,
+          feedback: `Set topic “${objective.topicName}” to an assumed ${(objective.assumedFailureRatePerAttempt * 100).toFixed(0)}% failure rate per attempt, at least ${objective.minimumMaxDeliveryRetries} retries, and a fixed ${objective.assumedRetryBackoffMs} ms retry delay.`,
+        };
+      }
+      return { complete: true, feedback: "The topic retry estimate assumptions are configured; this does not establish a delivery guarantee." };
+    }
+
+    case "reflection":
+      return {
+        complete: true,
+        feedback: `Self-check acknowledged. This reflection is not verified by the simulator. ${objective.limitation}`,
+      };
 
     case "queue-contract": {
       const queues = componentNodes(nodes, objective.queueComponentId);

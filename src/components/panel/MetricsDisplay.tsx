@@ -20,6 +20,15 @@ function abbrev(n: number): string {
   return String(Math.round(n));
 }
 
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n)) return "∞";
+  if (n >= 1e12) return `${(n / 1e12).toFixed(1)} TB`;
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)} KB`;
+  return `${Math.round(n)} B`;
+}
+
 export function MetricsDisplay() {
   const result = useSimulationStore((s) => s.result);
   const nodes = useCanvasStore((s) => s.nodes);
@@ -167,6 +176,65 @@ export function MetricsDisplay() {
                     </p>
                   </div>
                 </div>
+                {m.databaseReadWorkQPS !== undefined && (
+                  <div className="mt-2 space-y-1 border-t border-zinc-700 pt-1.5">
+                    <p className="text-[10px] font-medium text-cyan-300">Modeled database work</p>
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="text-zinc-400">Read work</span>
+                      <span className="font-mono tabular-nums text-zinc-200">{abbrev(m.databaseReadWorkQPS)} work/s</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="text-zinc-400">Write work</span>
+                      <span className="font-mono tabular-nums text-zinc-200">{abbrev(m.databaseWriteWorkQPS ?? 0)} work/s</span>
+                    </div>
+                    <p className="text-[10px] leading-relaxed text-zinc-500">
+                      Abstract modeled operations, including configured retry attempts and index cost; not a count of successful commits or physical I/O.
+                    </p>
+                  </div>
+                )}
+                {m.estimatedReadReplicaWorkCapacity !== undefined && (
+                  <div className="mt-2 space-y-1 border-t border-zinc-700 pt-1.5">
+                    {m.estimatedPrimaryDatabaseWorkQPS !== undefined && (
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-zinc-400">Estimated primary work / capacity</span>
+                        <span className="font-mono tabular-nums text-zinc-200">
+                          {abbrev(m.estimatedPrimaryDatabaseWorkQPS)} / {abbrev(m.estimatedPrimaryDatabaseWorkCapacity ?? 0)} work/s
+                          {` · ${((m.estimatedPrimaryDatabaseUtilization ?? 0) * 100).toFixed(0)}%`}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="text-violet-300">Estimated copy read work / capacity</span>
+                      <span className="font-mono tabular-nums text-zinc-200">
+                        {abbrev(m.estimatedReadReplicaReadWorkQPS ?? m.databaseReadWorkQPS ?? 0)} / {abbrev(m.estimatedReadReplicaWorkCapacity)} work/s
+                        {` · ${((m.estimatedReadReplicaUtilization ?? 0) * 100).toFixed(0)}%`}
+                      </span>
+                    </div>
+                    <p className="text-[10px] leading-relaxed text-zinc-500">
+                      Hypothetical work split and per-copy capacity comparison only. Actual requests remain on the simulated database path; replication overhead, freshness, and availability are not modeled. These estimates do not change actual DB utilization or throughput.
+                    </p>
+                  </div>
+                )}
+                {m.estimatedDatabasePartitionWork && m.estimatedDatabasePartitionWork.length > 0 && (
+                  <div className="mt-2 space-y-1 border-t border-zinc-700 pt-1.5">
+                    <p className="text-[10px] font-medium text-cyan-300">Estimated hash-shard work</p>
+                    {m.estimatedDatabasePartitionWork.map((estimate) => (
+                      <div key={estimate.tableName} className="flex items-center justify-between gap-2 text-[10px]">
+                        <span className="min-w-0 truncate text-zinc-400" title={estimate.tableName}>
+                          {estimate.tableName}: hot {abbrev(estimate.estimatedHotShardWorkQPS)} / uniform {abbrev(estimate.estimatedUniformShardWorkQPS)} work/s
+                        </span>
+                        {estimate.estimatedHotShardUtilization !== undefined && (
+                          <span className={`shrink-0 font-mono tabular-nums ${estimate.estimatedHotShardUtilization > 1 ? "text-amber-300" : "text-zinc-200"}`}>
+                            {(estimate.estimatedHotShardUtilization * 100).toFixed(0)}%
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                    <p className="text-[10px] leading-relaxed text-zinc-500">
+                      Directional table-work estimate from the configured hot-key share; this does not route queries or change aggregate database throughput.
+                    </p>
+                  </div>
+                )}
                 {(m.rejectedQPS ?? 0) > 0 && (
                   <p className="mt-1 text-[10px] text-amber-300">
                     {abbrev(m.rejectedQPS ?? 0)} requests/sec rejected
@@ -179,6 +247,52 @@ export function MetricsDisplay() {
                       {abbrev(m.queueDepth)} messages
                       {m.queueBacklogQPS !== undefined && ` · +${abbrev(m.queueBacklogQPS)}/s`}
                     </span>
+                  </div>
+                )}
+                {m.estimatedQueueTopicBacklog && m.estimatedQueueTopicBacklog.length > 0 && (
+                  <div className="mt-2 space-y-1 border-t border-zinc-700 pt-1.5">
+                    <p className="text-[10px] font-medium text-cyan-300">Projected backlog by topic</p>
+                    {m.estimatedQueueTopicBacklog.map((estimate) => (
+                      <div key={estimate.topicName} className="space-y-0.5 text-[10px]">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate text-zinc-400" title={estimate.topicName}>{estimate.topicName}</span>
+                          <span className={`shrink-0 font-mono tabular-nums ${estimate.estimatedBacklogGrowthPerSec > 0 ? "text-amber-300" : "text-zinc-200"}`}>
+                            +{abbrev(estimate.estimatedBacklogGrowthPerSec)}/s · {abbrev(estimate.estimatedBacklogDepth)} messages
+                          </span>
+                        </div>
+                        <p className="text-zinc-500">
+                          {abbrev(estimate.acceptedMessagesPerSec)} accepted/s · {abbrev(estimate.estimatedProcessedMessagesPerSec)} estimated processed/s
+                          {estimate.estimatedBacklogPayloadBytes !== undefined && ` · ${formatBytes(estimate.estimatedBacklogPayloadBytes)} logical payload`}
+                        </p>
+                        {estimate.estimatedDeliveryAttemptsPerSec !== undefined && (
+                          <p className="text-violet-300">
+                            Retry estimate: {abbrev(estimate.estimatedRetryAttemptsPerSec ?? 0)} retry attempts/s · {abbrev(estimate.estimatedSuccessfulDeliveriesPerSec ?? 0)} successful/s · {abbrev(estimate.estimatedExhaustedDeliveriesPerSec ?? 0)} exhausted/s
+                            {estimate.estimatedRetryWaitMsPerDelivery !== undefined && ` · ${estimate.estimatedRetryWaitMsPerDelivery.toFixed(1)} ms expected retry wait/delivery`}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                    <p className="text-[10px] leading-relaxed text-zinc-500">
+                      Constant-rate projection from an empty backlog for configured topics only; payload uses the assumed average message size and excludes broker overhead. Retry figures assume independent, constant per-attempt failures; any wait estimate assumes the same fixed delay per retry. Retry work does not feed capacity/backlog, exhausted messages are not routed to a DLQ, and acknowledgments, offsets, retry schedules, ordering, duplicate effects, consumer lag, and broker state are not modeled. No delivery guarantee is implied.
+                    </p>
+                  </div>
+                )}
+                {m.estimatedQueueTopicStorage && m.estimatedQueueTopicStorage.length > 0 && (
+                  <div className="mt-2 space-y-1 border-t border-zinc-700 pt-1.5">
+                    <p className="text-[10px] font-medium text-cyan-300">Estimated retained payload</p>
+                    {m.estimatedQueueTopicStorage.map((estimate) => (
+                      <div key={estimate.topicName} className="flex items-center justify-between gap-2 text-[10px]">
+                        <span className="min-w-0 truncate text-zinc-400" title={estimate.topicName}>
+                          {estimate.topicName} · {abbrev(estimate.acceptedMessagesPerSec)}/s × {abbrev(estimate.estimatedAverageMessageSizeBytes)} B × {estimate.retentionHours}h
+                        </span>
+                        <span className="shrink-0 font-mono tabular-nums text-zinc-200">
+                          {formatBytes(estimate.estimatedRetainedPayloadBytes)}
+                        </span>
+                      </div>
+                    ))}
+                    <p className="text-[10px] leading-relaxed text-zinc-500">
+                      Constant accepted-rate payload estimate only; excludes replicas, compression, indexes, metadata, and segment overhead. No broker storage is simulated.
+                    </p>
                   </div>
                 )}
               </div>

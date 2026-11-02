@@ -8,6 +8,7 @@ import type {
   CacheConfiguration,
   DatabaseColumn,
   DatabaseIndex,
+  DatabaseReplicationEstimate,
   DatabaseTable,
   EndpointDefinition,
   EndpointFieldDefinition,
@@ -174,6 +175,9 @@ export function RuntimeModelEditor({
   const subscriptions = Array.isArray(queueConfig.subscriptions) ? queueConfig.subscriptions : [];
   const saveQueueConfig = (next: QueueConfiguration) => updateNodeData(nodeId, { queueConfig: next });
   const saveTables = (next: DatabaseTable[]) => updateNodeData(nodeId, { tables: next });
+  const replicationEstimate = data.databaseReplicationEstimate as DatabaseReplicationEstimate | undefined;
+  const saveReplicationEstimate = (next: DatabaseReplicationEstimate | undefined) =>
+    updateNodeData(nodeId, { databaseReplicationEstimate: next });
   const controlTarget = (id: string) => ({
     "data-tutorial-target": `control:${id}`,
     "data-tutorial-highlight": tutorialHighlight?.kind === "control" && tutorialHighlight.id === id && tutorialHighlight.componentId === data.componentId ? "true" : undefined,
@@ -762,6 +766,126 @@ export function RuntimeModelEditor({
           ><Plus className="h-3 w-3" /> {usesTables ? "Add table" : "Add collection"}</button>
         </div>
 
+        <div className="space-y-2 rounded border border-violet-900/60 bg-violet-950/20 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-medium text-violet-200">Read-replica capacity · estimate only</span>
+            {replicationEstimate ? (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => saveReplicationEstimate(undefined)}
+                className="text-[10px] text-zinc-500 hover:text-rose-300 disabled:opacity-50"
+              >Remove</button>
+            ) : (
+              <button
+                data-tutorial-target="control:database-read-replica-configure"
+                data-tutorial-highlight={controlHighlight("database-read-replica-configure")}
+                type="button"
+                disabled={disabled}
+                onClick={() => saveReplicationEstimate({
+                  estimatedReadReplicaCount: 1,
+                  estimatedReadTrafficToReplicasShare: 1,
+                })}
+                className="text-[10px] text-violet-300 hover:text-violet-200 disabled:opacity-50"
+              >Configure</button>
+            )}
+          </div>
+          {replicationEstimate && (
+            <div className="space-y-2">
+              <label className="flex items-center justify-between gap-2 text-[10px] text-zinc-400">
+                Assumed additional read-serving copies
+                <input
+                  data-tutorial-target="control:database-read-replica-count"
+                  data-tutorial-highlight={controlHighlight("database-read-replica-count")}
+                  aria-label="Estimated additional read-serving copies"
+                  type="number"
+                  min="1"
+                  max="1000"
+                  step="1"
+                  disabled={disabled}
+                  value={replicationEstimate.estimatedReadReplicaCount}
+                  onChange={(event) => saveReplicationEstimate({
+                    ...replicationEstimate,
+                    estimatedReadReplicaCount: Math.min(1000, Math.max(1, Math.floor(Number(event.target.value) || 1))),
+                  })}
+                  className={`${inputClass(disabled)} w-20 text-right font-mono`}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-2 text-[10px] text-zinc-400">
+                Assumed read work served by copies
+                <span className="flex items-center gap-1">
+                  <input
+                    data-tutorial-target="control:database-read-replica-share"
+                    data-tutorial-highlight={controlHighlight("database-read-replica-share")}
+                    aria-label="Estimated read work share served by additional copies"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="5"
+                    disabled={disabled}
+                    value={Math.round((replicationEstimate.estimatedReadTrafficToReplicasShare ?? 1) * 100)}
+                    onChange={(event) => saveReplicationEstimate({
+                      ...replicationEstimate,
+                      estimatedReadTrafficToReplicasShare: Math.min(100, Math.max(0, Number(event.target.value) || 0)) / 100,
+                    })}
+                    className={`${inputClass(disabled)} w-20 text-right font-mono`}
+                  />
+                  <span>%</span>
+                </span>
+              </label>
+                <label className="flex items-center justify-between gap-2 text-[10px] text-zinc-400">
+                  Assumed replication lag
+                  <span className="flex items-center gap-1">
+                    <input
+                      data-tutorial-target="control:database-replication-lag"
+                      data-tutorial-highlight={controlHighlight("database-replication-lag")}
+                      aria-label="Estimated replication lag in milliseconds"
+                      type="number"
+                      min="0"
+                      step="10"
+                      disabled={disabled}
+                      value={replicationEstimate.estimatedReplicationLagMs ?? ""}
+                      onChange={(event) => saveReplicationEstimate({
+                        ...replicationEstimate,
+                        estimatedReplicationLagMs: event.target.value === ""
+                          ? undefined
+                          : Math.max(0, Number(event.target.value) || 0),
+                      })}
+                      className={`${inputClass(disabled)} w-20 text-right font-mono`}
+                    />
+                    <span>ms</span>
+                  </span>
+                </label>
+                <label className="flex items-center justify-between gap-2 text-[10px] text-zinc-400">
+                  Maximum tolerated read staleness
+                  <span className="flex items-center gap-1">
+                    <input
+                      data-tutorial-target="control:database-read-staleness-budget"
+                      data-tutorial-highlight={controlHighlight("database-read-staleness-budget")}
+                      aria-label="Maximum tolerated read staleness in milliseconds"
+                      type="number"
+                      min="0"
+                      step="10"
+                      disabled={disabled}
+                      value={replicationEstimate.maximumToleratedReadStalenessMs ?? ""}
+                      onChange={(event) => saveReplicationEstimate({
+                        ...replicationEstimate,
+                        maximumToleratedReadStalenessMs: event.target.value === ""
+                          ? undefined
+                          : Math.max(0, Number(event.target.value) || 0),
+                      })}
+                      className={`${inputClass(disabled)} w-20 text-right font-mono`}
+                    />
+                    <span>ms</span>
+                  </span>
+                </label>
+            </div>
+          )}
+          <p className="text-[10px] leading-relaxed text-zinc-500">
+              Capacity and risk estimates only: compares the assumed read share against identical extra copies at this database’s configured QPS. If both lag and staleness budget are supplied, simulation can flag when the first exceeds the second. It does not route reads, model replication overhead or actual freshness, or change throughput. Requires app-server database-read steps for workload metrics.
+          </p>
+        </div>
+
         {tables.length === 0 && (
           <p className="rounded bg-zinc-800/70 p-2 text-[11px] text-zinc-500">
             {usesTables
@@ -807,6 +931,117 @@ export function RuntimeModelEditor({
                 className={`${inputClass(disabled)} w-32 text-right font-mono`}
               />
             </label>
+
+            {table.partitioning ? (
+              <div className="space-y-2 rounded border border-cyan-900/60 bg-cyan-950/20 p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-medium text-cyan-200">Hash partitioning · estimate only</span>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => saveTables(tables.map((item) => item.id === table.id ? { ...item, partitioning: undefined } : item))}
+                    className="text-[10px] text-zinc-500 hover:text-rose-300 disabled:opacity-50"
+                  >Remove</button>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                  <label className="space-y-1 text-[10px] text-zinc-400">
+                    Partition key
+                    <select
+                      data-tutorial-target="control:database-partition-key"
+                      data-tutorial-highlight={controlHighlight("database-partition-key")}
+                      aria-label={`Table ${tableIndex + 1} partition key`}
+                      disabled={disabled}
+                      value={table.partitioning.keyColumn}
+                      onChange={(event) => saveTables(tables.map((item) => item.id === table.id ? {
+                        ...item,
+                        partitioning: { ...table.partitioning!, keyColumn: event.target.value },
+                      } : item))}
+                      className={`${inputClass(disabled)} w-full`}
+                    >
+                      <option value="">Choose column</option>
+                      {table.columns.map((column) => <option key={column.id} value={column.name}>{column.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="space-y-1 text-[10px] text-zinc-400">
+                    Shards
+                    <input
+                      data-tutorial-target="control:database-shard-count"
+                      data-tutorial-highlight={controlHighlight("database-shard-count")}
+                      aria-label={`Table ${tableIndex + 1} shard count`}
+                      type="number"
+                      min="1"
+                      step="1"
+                      disabled={disabled}
+                      value={table.partitioning.shardCount}
+                      onChange={(event) => saveTables(tables.map((item) => item.id === table.id ? {
+                        ...item,
+                        partitioning: { ...table.partitioning!, shardCount: Number(event.target.value) },
+                      } : item))}
+                      className={`${inputClass(disabled)} w-full text-right`}
+                    />
+                  </label>
+                  <label className="space-y-1 text-[10px] text-zinc-400">
+                    Hottest key traffic (%)
+                    <input
+                      data-tutorial-target="control:database-hot-key-share"
+                      data-tutorial-highlight={controlHighlight("database-hot-key-share")}
+                      aria-label={`Table ${tableIndex + 1} hottest key traffic share percent`}
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      disabled={disabled}
+                      value={Math.round(table.partitioning.hotKeyTrafficShare * 100)}
+                      onChange={(event) => saveTables(tables.map((item) => item.id === table.id ? {
+                        ...item,
+                        partitioning: { ...table.partitioning!, hotKeyTrafficShare: Math.min(100, Math.max(0, Number(event.target.value) || 0)) / 100 },
+                      } : item))}
+                      className={`${inputClass(disabled)} w-full text-right`}
+                    />
+                  </label>
+                  <label className="space-y-1 text-[10px] text-zinc-400">
+                    Estimated shard capacity (work/s)
+                    <input
+                      data-tutorial-target="control:database-shard-capacity"
+                      data-tutorial-highlight={controlHighlight("database-shard-capacity")}
+                      aria-label={`Table ${tableIndex + 1} estimated work capacity per shard`}
+                      type="number"
+                      min="0.01"
+                      step="100"
+                      disabled={disabled}
+                      value={table.partitioning.estimatedWorkCapacityPerShard ?? ""}
+                      onChange={(event) => saveTables(tables.map((item) => item.id === table.id ? {
+                        ...item,
+                        partitioning: {
+                          ...table.partitioning!,
+                          estimatedWorkCapacityPerShard: event.target.value === "" ? undefined : Number(event.target.value),
+                        },
+                      } : item))}
+                      className={`${inputClass(disabled)} w-full text-right font-mono`}
+                      placeholder="optional"
+                    />
+                  </label>
+                </div>
+                <p className="text-[10px] leading-relaxed text-zinc-500">Assumes non-hot keys hash uniformly and similar work per request. With a per-shard capacity estimate, simulation compares this table’s modeled read/write work against estimated hot-shard pressure; it does not change database throughput or model query routing.</p>
+              </div>
+            ) : (
+              <button
+                data-tutorial-target="control:database-partitioning-add"
+                data-tutorial-highlight={controlHighlight("database-partitioning-add")}
+                type="button"
+                disabled={disabled || table.columns.length === 0}
+                onClick={() => saveTables(tables.map((item) => item.id === table.id ? {
+                  ...item,
+                  partitioning: {
+                    strategy: "hash",
+                    keyColumn: table.columns[0]?.name ?? "",
+                    shardCount: 4,
+                    hotKeyTrafficShare: 0,
+                  },
+                } : item))}
+                className="inline-flex items-center gap-1 rounded border border-cyan-900/60 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-950/40 disabled:opacity-50"
+              ><Plus className="h-3 w-3" /> Configure hash partitioning</button>
+            )}
 
             <div className="space-y-1.5">
               {table.columns.map((column, columnIndex) => (
@@ -1016,7 +1251,8 @@ export function RuntimeModelEditor({
             ><Plus className="h-3 w-3" /> Add topic</button>
           </div>
           {queueConfig.topics.map((topic: QueueTopicDefinition, topicIndex) => (
-            <div key={topic.id} className="grid grid-cols-[minmax(0,1fr)_88px_auto] items-center gap-1.5">
+            <div key={topic.id} className="space-y-1.5">
+            <div className="grid grid-cols-[minmax(0,1fr)_52px_52px_60px_66px_auto] items-center gap-1.5">
               <input
                 data-tutorial-target="control:queue-topic-name"
                 data-tutorial-highlight={controlHighlight("queue-topic-name")}
@@ -1033,6 +1269,8 @@ export function RuntimeModelEditor({
                 className={`${inputClass(disabled)} min-w-0 font-mono`}
               />
               <input
+                data-tutorial-target="control:queue-topic-retention"
+                data-tutorial-highlight={controlHighlight("queue-topic-retention")}
                 aria-label={`Queue topic ${topicIndex + 1} retention hours`}
                 type="number"
                 min="0.01"
@@ -1048,6 +1286,61 @@ export function RuntimeModelEditor({
                 placeholder="hours"
                 className={`${inputClass(disabled)} text-right`}
               />
+              <input
+                data-tutorial-target="control:queue-topic-partitions"
+                data-tutorial-highlight={controlHighlight("queue-topic-partitions")}
+                aria-label={`Queue topic ${topicIndex + 1} partition count`}
+                type="number"
+                min="1"
+                step="1"
+                disabled={disabled}
+                value={topic.partitionCount ?? ""}
+                onChange={(event) => saveQueueConfig({
+                  ...queueConfig,
+                  topics: queueConfig.topics.map((item) => item.id === topic.id
+                    ? { ...item, partitionCount: event.target.value === "" ? undefined : Number(event.target.value) }
+                    : item),
+                })}
+                placeholder="parts"
+                className={`${inputClass(disabled)} text-right`}
+              />
+              <input
+                data-tutorial-target="control:queue-topic-hot-partition-share"
+                data-tutorial-highlight={controlHighlight("queue-topic-hot-partition-share")}
+                aria-label={`Queue topic ${topicIndex + 1} estimated hottest partition traffic percent`}
+                type="number"
+                min={topic.partitionCount ? (100 / topic.partitionCount).toString() : "0.01"}
+                max="100"
+                step="0.1"
+                disabled={disabled}
+                value={topic.estimatedHotPartitionTrafficShare === undefined ? "" : topic.estimatedHotPartitionTrafficShare * 100}
+                onChange={(event) => saveQueueConfig({
+                  ...queueConfig,
+                  topics: queueConfig.topics.map((item) => item.id === topic.id
+                    ? { ...item, estimatedHotPartitionTrafficShare: event.target.value === "" ? undefined : Number(event.target.value) / 100 }
+                    : item),
+                })}
+                placeholder="hot %"
+                className={`${inputClass(disabled)} text-right`}
+              />
+              <input
+                data-tutorial-target="control:queue-topic-message-size"
+                data-tutorial-highlight={controlHighlight("queue-topic-message-size")}
+                aria-label={`Queue topic ${topicIndex + 1} estimated average message size bytes`}
+                type="number"
+                min="1"
+                step="1"
+                disabled={disabled}
+                value={topic.estimatedAverageMessageSizeBytes ?? ""}
+                onChange={(event) => saveQueueConfig({
+                  ...queueConfig,
+                  topics: queueConfig.topics.map((item) => item.id === topic.id
+                    ? { ...item, estimatedAverageMessageSizeBytes: event.target.value === "" ? undefined : Number(event.target.value) }
+                    : item),
+                })}
+                placeholder="bytes"
+                className={`${inputClass(disabled)} text-right`}
+              />
               <button
                 type="button"
                 disabled={disabled}
@@ -1059,7 +1352,75 @@ export function RuntimeModelEditor({
                 className="rounded p-1.5 text-zinc-500 hover:bg-zinc-700 hover:text-rose-400 disabled:opacity-50"
               ><Trash2 className="h-3.5 w-3.5" /></button>
             </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              <input
+                data-tutorial-target="control:queue-topic-failure-rate"
+                data-tutorial-highlight={controlHighlight("queue-topic-failure-rate")}
+                aria-label={`Queue topic ${topicIndex + 1} estimated delivery failure rate percent`}
+                type="number"
+                min="0"
+                max="100"
+                step="0.1"
+                disabled={disabled}
+                value={topic.estimatedFailureRatePerAttempt === undefined ? "" : topic.estimatedFailureRatePerAttempt * 100}
+                onChange={(event) => saveQueueConfig({
+                  ...queueConfig,
+                  topics: queueConfig.topics.map((item) => item.id === topic.id
+                    ? { ...item, estimatedFailureRatePerAttempt: event.target.value === "" ? undefined : Number(event.target.value) / 100 }
+                    : item),
+                })}
+                placeholder="assumed failure %"
+                className={`${inputClass(disabled)} text-right`}
+              />
+              <input
+                data-tutorial-target="control:queue-topic-retries"
+                data-tutorial-highlight={controlHighlight("queue-topic-retries")}
+                aria-label={`Queue topic ${topicIndex + 1} estimated maximum delivery retries`}
+                type="number"
+                min="0"
+                max="5"
+                step="1"
+                disabled={disabled}
+                value={topic.maxDeliveryRetries ?? ""}
+                onChange={(event) => saveQueueConfig({
+                  ...queueConfig,
+                  topics: queueConfig.topics.map((item) => item.id === topic.id
+                    ? { ...item, maxDeliveryRetries: event.target.value === "" ? undefined : Number(event.target.value) }
+                    : item),
+                })}
+                placeholder="max retries (0–5)"
+                className={`${inputClass(disabled)} text-right`}
+              />
+              <input
+                data-tutorial-target="control:queue-topic-retry-backoff"
+                data-tutorial-highlight={controlHighlight("queue-topic-retry-backoff")}
+                aria-label={`Queue topic ${topicIndex + 1} estimated retry backoff milliseconds`}
+                type="number"
+                min="0"
+                step="1"
+                disabled={disabled}
+                value={topic.estimatedRetryBackoffMs ?? ""}
+                onChange={(event) => saveQueueConfig({
+                  ...queueConfig,
+                  topics: queueConfig.topics.map((item) => item.id === topic.id
+                    ? { ...item, estimatedRetryBackoffMs: event.target.value === "" ? undefined : Number(event.target.value) }
+                    : item),
+                })}
+                placeholder="delay ms"
+                className={`${inputClass(disabled)} text-right`}
+              />
+            </div>
+            </div>
           ))}
+          <p className="text-[10px] leading-relaxed text-zinc-500">
+            Optional hottest-partition traffic share (percent). It must be at least the uniform share (100% ÷ partitions); only the competing-consumer backlog estimate uses it.
+          </p>
+          <p className="text-[10px] leading-relaxed text-zinc-500">
+            Optional average message payload size (bytes). With retention configured, this estimates logical retained payload only; it excludes replication, compression, metadata, and broker storage overhead.
+          </p>
+          <p className="text-[10px] leading-relaxed text-zinc-500">
+            Optional retry estimate: set both an assumed independent per-attempt failure rate and 0–5 additional attempts. A fixed per-retry delay can estimate expected waiting time only; retry timing, acknowledgments, offsets, DLQ routing, and duplicate effects are not simulated, and retry work does not change capacity or backlog.
+          </p>
         </div>
         <div className="space-y-2 border-t border-zinc-700 pt-2">
           <div className="flex items-center justify-between gap-2">
@@ -1148,7 +1509,7 @@ export function RuntimeModelEditor({
           })}
         </div>
         <p className="rounded bg-zinc-800/70 p-2 text-[10px] leading-relaxed text-zinc-400">
-          Publish steps and subscriptions map topic traffic to consumers; legacy or unmapped traffic uses connected consumers. Retention is not simulated. Backlog is a constant-rate projection from an empty backlog over the selected duration, not broker state or a time series.
+          Publish steps and subscriptions map topic traffic to consumers; legacy or unmapped traffic uses connected consumers. Retention is not simulated. For competing groups, configured partitions cap the aggregate backlog-drain estimate by available consumer parallelism; keyed assignment, skew, offsets, and replay are not modeled. Backlog is a constant-rate projection from an empty backlog over the selected duration, not broker state or a time series.
         </p>
       </section>
     );

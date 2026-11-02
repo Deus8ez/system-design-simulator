@@ -221,6 +221,336 @@ test("request profiles and cache steps without a rate retain the existing defaul
   assert.ok(Math.abs(result.nodeMetrics.get("db").incomingQPS - 100) < 1e-9);
 });
 
+test("database read-copy estimate is supplementary and does not change simulated throughput", () => {
+  const { nodes, edges } = makeCacheReadDesign(0);
+  const database = nodes.find(({ id }) => id === "db");
+  database.data.databaseReplicationEstimate = { estimatedReadReplicaCount: 2 };
+
+  const estimated = runSimulation(nodes, edges, 1000);
+  const legacyNodes = nodes.map((node) => ({
+    ...node,
+    data: { ...node.data, databaseReplicationEstimate: undefined },
+  }));
+  const legacy = runSimulation(legacyNodes, edges, 1000);
+  const dbMetrics = estimated.nodeMetrics.get("db");
+
+  assert.equal(dbMetrics.databaseReadWorkQPS, 5000);
+  assert.equal(dbMetrics.estimatedReadReplicaReadWorkQPS, 5000);
+  assert.equal(dbMetrics.estimatedPrimaryDatabaseWorkQPS, dbMetrics.databaseWriteWorkQPS);
+  assert.equal(dbMetrics.estimatedReadReplicaWorkCapacity, 20000);
+  assert.equal(dbMetrics.estimatedReadReplicaUtilization, 0.25);
+  assert.equal(estimated.throughput, legacy.throughput);
+  assert.equal(dbMetrics.incomingQPS, legacy.nodeMetrics.get("db").incomingQPS);
+  assert.equal(dbMetrics.utilization, legacy.nodeMetrics.get("db").utilization);
+});
+
+test("database read-copy estimate reports zero modeled read work without endpoint database reads", () => {
+  const database = {
+    id: "db",
+    type: "component",
+    position: { x: 0, y: 0 },
+    data: {
+      componentId: "nosql-db",
+      label: "Database",
+      category: "storage",
+      replicas: 1,
+      maxQPS: 10000,
+      latencyMs: 1,
+      scalable: true,
+      databaseReplicationEstimate: { estimatedReadReplicaCount: 3 },
+    },
+  };
+  const result = runSimulation([database], [], 500);
+  const metrics = result.nodeMetrics.get("db");
+  assert.equal(metrics.databaseReadWorkQPS, 0);
+  assert.equal(metrics.estimatedReadReplicaWorkCapacity, 30000);
+  assert.equal(metrics.estimatedReadReplicaUtilization, 0);
+});
+
+test("estimated read-copy share splits modeled work without changing simulated traffic", () => {
+  const { nodes, edges } = makeCacheReadDesign(0);
+  nodes.find(({ id }) => id === "app").data.endpoints.push({
+    id: "write-item",
+    method: "POST",
+    path: "/items",
+    steps: [
+      { id: "db-write", kind: "database-write", targetNodeId: "db", target: "items" },
+      { id: "write-response", kind: "respond" },
+    ],
+  });
+  const database = nodes.find(({ id }) => id === "db");
+  database.data.databaseReplicationEstimate = {
+    estimatedReadReplicaCount: 2,
+    estimatedReadTrafficToReplicasShare: 0.6,
+  };
+
+  const estimated = runSimulation(nodes, edges, 1000);
+  const legacyNodes = nodes.map((node) => ({
+    ...node,
+    data: { ...node.data, databaseReplicationEstimate: undefined },
+  }));
+  const legacy = runSimulation(legacyNodes, edges, 1000);
+  const dbMetrics = estimated.nodeMetrics.get("db");
+
+  assert.ok(dbMetrics.databaseReadWorkQPS > 0);
+  assert.ok(dbMetrics.databaseWriteWorkQPS > 0);
+  assert.equal(dbMetrics.estimatedReadReplicaReadWorkQPS, dbMetrics.databaseReadWorkQPS * 0.6);
+  assert.equal(dbMetrics.estimatedPrimaryDatabaseWorkQPS, dbMetrics.databaseWriteWorkQPS + dbMetrics.databaseReadWorkQPS * 0.4);
+  assert.equal(dbMetrics.estimatedPrimaryDatabaseWorkCapacity, 10000);
+  assert.equal(dbMetrics.estimatedPrimaryDatabaseUtilization, dbMetrics.estimatedPrimaryDatabaseWorkQPS / 10000);
+  assert.equal(dbMetrics.estimatedReadReplicaWorkCapacity, 20000);
+  assert.equal(dbMetrics.estimatedReadReplicaUtilization, dbMetrics.estimatedReadReplicaReadWorkQPS / 20000);
+  assert.equal(estimated.throughput, legacy.throughput);
+  assert.equal(dbMetrics.incomingQPS, legacy.nodeMetrics.get("db").incomingQPS);
+  assert.equal(dbMetrics.utilization, legacy.nodeMetrics.get("db").utilization);
+});
+
+test("replica lag estimate warns above the read-staleness budget without changing simulation", () => {
+  const { nodes, edges } = makeCacheReadDesign(0);
+  const database = nodes.find(({ id }) => id === "db");
+  database.data.databaseReplicationEstimate = {
+    estimatedReadReplicaCount: 2,
+    estimatedReadTrafficToReplicasShare: 0.8,
+    estimatedReplicationLagMs: 800,
+    maximumToleratedReadStalenessMs: 500,
+  };
+
+  const estimated = runSimulation(nodes, edges, 1000);
+  const equalBudgetNodes = nodes.map((node) => ({
+    ...node,
+    data: {
+      ...node.data,
+      databaseReplicationEstimate: node.data.databaseReplicationEstimate
+        ? { ...node.data.databaseReplicationEstimate, maximumToleratedReadStalenessMs: 800 }
+        : undefined,
+    },
+  }));
+  const equalBudget = runSimulation(equalBudgetNodes, edges, 1000);
+  const noEstimateNodes = nodes.map((node) => ({
+    ...node,
+    data: { ...node.data, databaseReplicationEstimate: undefined },
+  }));
+  const noEstimate = runSimulation(noEstimateNodes, edges, 1000);
+  const noCopyReadNodes = nodes.map((node) => ({
+    ...node,
+    data: {
+      ...node.data,
+      databaseReplicationEstimate: node.data.databaseReplicationEstimate
+        ? { ...node.data.databaseReplicationEstimate, estimatedReadTrafficToReplicasShare: 0 }
+        : undefined,
+    },
+  }));
+  const noCopyRead = runSimulation(noCopyReadNodes, edges, 1000);
+  const noDatabaseRead = makeCacheReadDesign(1);
+  noDatabaseRead.nodes.find(({ id }) => id === "db").data.databaseReplicationEstimate = {
+    estimatedReadReplicaCount: 2,
+    estimatedReadTrafficToReplicasShare: 0.8,
+    estimatedReplicationLagMs: 800,
+    maximumToleratedReadStalenessMs: 500,
+  };
+  const noDatabaseReadResult = runSimulation(noDatabaseRead.nodes, noDatabaseRead.edges, 1000);
+  const dbMetrics = estimated.nodeMetrics.get("db");
+
+  assert.ok(estimated.warnings.some((warning) => /assumed 80% read share.*800 ms estimated lag.*above the 500 ms scenario budget.*reads are not routed/i.test(warning)));
+  assert.equal(equalBudget.warnings.some((warning) => /read-copy freshness estimate/.test(warning)), false);
+  assert.equal(noEstimate.warnings.some((warning) => /read-copy freshness estimate/.test(warning)), false);
+  assert.equal(noCopyRead.warnings.some((warning) => /read-copy freshness estimate/.test(warning)), false);
+  assert.equal(noDatabaseReadResult.warnings.some((warning) => /read-copy freshness estimate/.test(warning)), false);
+  assert.equal(estimated.throughput, noEstimate.throughput);
+  assert.equal(dbMetrics.incomingQPS, noEstimate.nodeMetrics.get("db").incomingQPS);
+  assert.equal(dbMetrics.utilization, noEstimate.nodeMetrics.get("db").utilization);
+});
+
+function makeDatabaseWriteWorkDesign({ retries, retryFailureRate, maxQPS = 10000, fault, partitioning } = {}) {
+  const app = {
+    id: "app",
+    type: "component",
+    position: { x: 0, y: 0 },
+    data: {
+      componentId: "app-server",
+      label: "Writer",
+      category: "compute",
+      replicas: 1,
+      maxQPS: 10000,
+      latencyMs: 1,
+      scalable: true,
+      endpoints: [{
+        id: "write-item",
+        method: "POST",
+        path: "/items",
+        steps: [
+          { id: "write-row", kind: "database-write", targetNodeId: "db", target: "items", retryAttempts: retries, retryFailureRate },
+          { id: "respond", kind: "respond" },
+        ],
+      }],
+    },
+  };
+  const db = {
+    id: "db",
+    type: "component",
+    position: { x: 100, y: 0 },
+    data: {
+      componentId: "sql-db",
+      label: "Items DB",
+      category: "storage",
+      replicas: 1,
+      maxQPS,
+      latencyMs: 5,
+      scalable: false,
+      tables: [{
+        id: "items-table",
+        name: "items",
+        estimatedRows: 1_000_000,
+        columns: [{ id: "item-id", name: "id", dataType: "UUID", nullable: false, primaryKey: true }],
+        indexes: [{ id: "items-name", name: "items_name_idx", columns: ["name"], unique: false }],
+        ...(partitioning ? { partitioning } : {}),
+      }],
+    },
+  };
+  return {
+    nodes: [app, db],
+    edges: [{ id: "app-db", source: "app", target: "db" }],
+    faults: fault ? { db: fault } : {},
+  };
+}
+
+test("database write work exposes index cost and expected retry-attempt amplification", () => {
+  const baseline = makeDatabaseWriteWorkDesign({});
+  const retrying = makeDatabaseWriteWorkDesign({ retries: 2, retryFailureRate: 0.5 });
+  const baselineResult = runSimulation(baseline.nodes, baseline.edges, 1000);
+  const retryResult = runSimulation(retrying.nodes, retrying.edges, 1000);
+
+  // One maintained index at a 1M-row depth has modeled cost 1.3. Two retries
+  // with p=0.5 yield 1 + 0.5 + 0.25 = 1.75 expected attempts.
+  assert.equal(baselineResult.nodeMetrics.get("db").databaseWriteWorkQPS, 1300);
+  assert.equal(retryResult.nodeMetrics.get("db").databaseWriteWorkQPS, 2275);
+  assert.equal(retryResult.nodeMetrics.get("db").databaseReadWorkQPS, 0);
+  assert.ok(retryResult.failedOperationsPerSec > 0);
+});
+
+test("database write work includes attempts against a down target without implying successful commits", () => {
+  const design = makeDatabaseWriteWorkDesign({ retries: 2, retryFailureRate: 0, fault: { mode: "down" } });
+  const result = runSimulation(design.nodes, design.edges, 1000, design.faults);
+  const dbMetrics = result.nodeMetrics.get("db");
+
+  assert.ok(Math.abs(dbMetrics.databaseWriteWorkQPS - 3900) < 1e-9);
+  assert.equal(dbMetrics.failedQPS, 1000);
+  assert.equal(result.failedOperationsPerSec, 1000);
+  assert.equal(result.throughput, 0);
+});
+
+test("database hash partition estimates compare modeled table work without changing aggregate simulation", () => {
+  const options = {
+    partitioning: {
+      strategy: "hash",
+      keyColumn: "id",
+      shardCount: 16,
+      hotKeyTrafficShare: 0.2,
+      estimatedWorkCapacityPerShard: 300,
+    },
+  };
+  const partitioned = makeDatabaseWriteWorkDesign(options);
+  const baseline = makeDatabaseWriteWorkDesign({});
+  const partitionedResult = runSimulation(partitioned.nodes, partitioned.edges, 1000);
+  const baselineResult = runSimulation(baseline.nodes, baseline.edges, 1000);
+  const estimate = partitionedResult.nodeMetrics.get("db").estimatedDatabasePartitionWork[0];
+
+  assert.equal(estimate.tableName, "items");
+  assert.equal(estimate.modeledReadWorkQPS, 0);
+  assert.equal(estimate.modeledWriteWorkQPS, 1300);
+  assert.equal(estimate.estimatedHotShardWorkQPS, 325);
+  assert.equal(estimate.estimatedUniformShardWorkQPS, 81.25);
+  assert.ok(Math.abs(estimate.estimatedHotShardUtilization - (325 / 300)) < 1e-12);
+  assert.ok(partitionedResult.warnings.some((warning) => /items.*hot-shard work.*325 work\/sec.*300 work\/sec per-shard capacity.*aggregate database throughput is unchanged/i.test(warning)));
+  assert.equal(partitionedResult.throughput, baselineResult.throughput);
+  assert.equal(partitionedResult.nodeMetrics.get("db").utilization, baselineResult.nodeMetrics.get("db").utilization);
+});
+
+test("database hash partition work estimate is omitted for tables without attributed endpoint work", () => {
+  const design = makeDatabaseWriteWorkDesign({
+    partitioning: {
+      strategy: "hash",
+      keyColumn: "id",
+      shardCount: 8,
+      hotKeyTrafficShare: 0,
+      estimatedWorkCapacityPerShard: 1000,
+    },
+  });
+  design.nodes[0].data.endpoints[0].steps = [{ id: "respond", kind: "respond" }];
+  const result = runSimulation(design.nodes, design.edges, 1000);
+  assert.equal(result.nodeMetrics.get("db").estimatedDatabasePartitionWork, undefined);
+});
+
+function makeHashPartitionedDatabaseDesign(partitioning) {
+  const app = {
+    id: "app",
+    type: "component",
+    position: { x: 0, y: 0 },
+    data: {
+      componentId: "app-server",
+      label: "Feed API",
+      category: "compute",
+      replicas: 1,
+      maxQPS: 10000,
+      latencyMs: 1,
+      scalable: true,
+      endpoints: [{
+        id: "feed-read",
+        method: "GET",
+        path: "/feed",
+        steps: [
+          { id: "posts-read", kind: "database-read", targetNodeId: "db", target: "posts.authorId" },
+          { id: "respond", kind: "respond" },
+        ],
+      }],
+    },
+  };
+  const db = {
+    id: "db",
+    type: "component",
+    position: { x: 100, y: 0 },
+    data: {
+      componentId: "sql-db",
+      label: "Posts DB",
+      category: "storage",
+      replicas: 1,
+      maxQPS: 5000,
+      latencyMs: 5,
+      scalable: true,
+      tables: [{
+        id: "posts-table",
+        name: "posts",
+        estimatedRows: 1000,
+        columns: [{ id: "author-id", name: "authorId", dataType: "TEXT", nullable: false, primaryKey: true }],
+        indexes: [],
+        partitioning,
+      }],
+    },
+  };
+  return { nodes: [app, db], edges: [{ id: "app-db", source: "app", target: "db" }] };
+}
+
+test("hash-partition simulation warns on estimated hot-shard skew without changing throughput", () => {
+  const uniform = makeHashPartitionedDatabaseDesign({
+    strategy: "hash",
+    keyColumn: "authorId",
+    shardCount: 16,
+    hotKeyTrafficShare: 0,
+  });
+  const uniformResult = runSimulation(uniform.nodes, uniform.edges, 1000);
+  assert.equal(uniformResult.warnings.some((warning) => /hottest shard/i.test(warning)), false);
+
+  const skewed = makeHashPartitionedDatabaseDesign({
+    strategy: "hash",
+    keyColumn: "authorId",
+    shardCount: 16,
+    hotKeyTrafficShare: 0.2,
+  });
+  const skewedResult = runSimulation(skewed.nodes, skewed.edges, 1000);
+  assert.equal(skewedResult.throughput, uniformResult.throughput);
+  assert.ok(skewedResult.warnings.some((warning) => /shard containing the hottest key is expected to receive about 25\.0%.*6\.3% under uniform keys.*throughput is unchanged/i.test(warning)));
+});
+
 function makeQueueDesign({ inputQPS = 1000, consumerCapacities = [], deliveryMode = "competing" } = {}) {
   const producer = {
     id: "producer",
@@ -314,6 +644,10 @@ function makeTopicQueueDesign({
   subscriptions,
   consumerCapacities = [10000, 10000],
   deliveryMode = "competing",
+  partitionCounts = {},
+  hotPartitionShares = {},
+  retentionHoursByTopic = {},
+  averageMessageSizeBytesByTopic = {},
 } = {}) {
   const design = makeQueueDesign({ consumerCapacities, deliveryMode });
   const producer = design.nodes[0];
@@ -330,7 +664,14 @@ function makeTopicQueueDesign({
     ],
   }));
   queue.data.queueConfig = {
-    topics: topicNames.map((name, index) => ({ id: `topic-${index}`, name })),
+    topics: topicNames.map((name, index) => ({
+      id: `topic-${index}`,
+      name,
+      ...(Object.hasOwn(partitionCounts, name) ? { partitionCount: partitionCounts[name] } : {}),
+      ...(Object.hasOwn(hotPartitionShares, name) ? { estimatedHotPartitionTrafficShare: hotPartitionShares[name] } : {}),
+      ...(Object.hasOwn(retentionHoursByTopic, name) ? { retentionHours: retentionHoursByTopic[name] } : {}),
+      ...(Object.hasOwn(averageMessageSizeBytesByTopic, name) ? { estimatedAverageMessageSizeBytes: averageMessageSizeBytesByTopic[name] } : {}),
+    })),
     subscriptions: subscriptions.map(({ consumerIndex, topicName }, index) => ({
       id: `subscription-${index}`,
       consumerNodeId: `consumer-${consumerIndex}`,
@@ -355,6 +696,135 @@ test("queue topic traffic reaches only its mapped consumers", () => {
   assert.equal(result.nodeMetrics.get("consumer-0").incomingQPS, 750);
   assert.equal(result.nodeMetrics.get("consumer-1").incomingQPS, 250);
   assert.equal(result.nodeMetrics.get("queue").queueBacklogQPS, 0);
+});
+
+test("queue reports per-topic backlog growth and depth using each topic's estimated processing rate", () => {
+  const design = makeTopicQueueDesign({
+    publishers: [
+      { topicName: "orders", trafficWeight: 3 },
+      { topicName: "metrics", trafficWeight: 1 },
+    ],
+    subscriptions: [
+      { consumerIndex: 0, topicName: "orders" },
+      { consumerIndex: 1, topicName: "metrics" },
+    ],
+    consumerCapacities: [300, 300],
+    averageMessageSizeBytesByTopic: { orders: 2048 },
+  });
+  const short = runSimulation(design.nodes, design.edges, 1000, {}, 10);
+  const long = runSimulation(design.nodes, design.edges, 1000, {}, 20);
+  const estimates = short.nodeMetrics.get("queue").estimatedQueueTopicBacklog;
+  const orders = estimates.find(({ topicName }) => topicName === "orders");
+  const metrics = estimates.find(({ topicName }) => topicName === "metrics");
+
+  assert.deepEqual(orders, {
+    topicName: "orders",
+    acceptedMessagesPerSec: 750,
+    estimatedProcessedMessagesPerSec: 300,
+    estimatedBacklogGrowthPerSec: 450,
+    estimatedBacklogDepth: 4500,
+    estimatedBacklogPayloadBytes: 9_216_000,
+  });
+  assert.deepEqual(metrics, {
+    topicName: "metrics",
+    acceptedMessagesPerSec: 250,
+    estimatedProcessedMessagesPerSec: 250,
+    estimatedBacklogGrowthPerSec: 0,
+    estimatedBacklogDepth: 0,
+  });
+  assert.equal(short.nodeMetrics.get("queue").queueBacklogQPS, 450);
+  assert.equal(short.nodeMetrics.get("queue").queueDepth, 4500);
+  assert.equal(long.nodeMetrics.get("queue").estimatedQueueTopicBacklog.find(({ topicName }) => topicName === "orders").estimatedBacklogDepth, 9000);
+  assert.equal(long.nodeMetrics.get("queue").estimatedQueueTopicBacklog.find(({ topicName }) => topicName === "orders").estimatedBacklogPayloadBytes, 18_432_000);
+  assert.equal(long.throughput, short.throughput);
+});
+
+test("queue retry estimate reports attempts, successes, and exhaustion without changing simulation rates", () => {
+  const design = makeTopicQueueDesign({
+    publishers: [{ topicName: "orders" }],
+    subscriptions: [{ consumerIndex: 0, topicName: "orders" }],
+    consumerCapacities: [10000],
+  });
+  const topic = design.nodes.find(({ id }) => id === "queue").data.queueConfig.topics[0];
+  const baseline = runSimulation(design.nodes, design.edges, 1000);
+  assert.equal(baseline.nodeMetrics.get("queue").estimatedQueueTopicBacklog[0].estimatedRetryAttemptsPerSec, undefined);
+
+  topic.estimatedFailureRatePerAttempt = 0.5;
+  topic.maxDeliveryRetries = 2;
+  const retryResult = runSimulation(design.nodes, design.edges, 1000);
+  const estimate = retryResult.nodeMetrics.get("queue").estimatedQueueTopicBacklog[0];
+  assert.equal(estimate.estimatedDeliveryAttemptsPerSec, 1750);
+  assert.equal(estimate.estimatedRetryAttemptsPerSec, 750);
+  assert.equal(estimate.estimatedSuccessfulDeliveriesPerSec, 875);
+  assert.equal(estimate.estimatedExhaustedDeliveriesPerSec, 125);
+  assert.equal(estimate.estimatedRetryWaitMsPerDelivery, undefined);
+  assert.equal(retryResult.nodeMetrics.get("queue").queueBacklogQPS, baseline.nodeMetrics.get("queue").queueBacklogQPS);
+  assert.equal(retryResult.nodeMetrics.get("queue").queueDepth, baseline.nodeMetrics.get("queue").queueDepth);
+  assert.equal(retryResult.nodeMetrics.get("consumer-0").incomingQPS, baseline.nodeMetrics.get("consumer-0").incomingQPS);
+  assert.equal(retryResult.nodeMetrics.get("consumer-0").utilization, baseline.nodeMetrics.get("consumer-0").utilization);
+  assert.equal(retryResult.throughput, baseline.throughput);
+
+  topic.estimatedRetryBackoffMs = 250;
+  const withBackoff = runSimulation(design.nodes, design.edges, 1000);
+  assert.equal(withBackoff.nodeMetrics.get("queue").estimatedQueueTopicBacklog[0].estimatedRetryWaitMsPerDelivery, 187.5);
+  assert.equal(withBackoff.totalLatencyMs, baseline.totalLatencyMs);
+  assert.equal(withBackoff.throughput, baseline.throughput);
+});
+
+test("queue retry estimate handles zero retries and certain failure without inventing success", () => {
+  const design = makeTopicQueueDesign({
+    publishers: [{ topicName: "orders" }],
+    subscriptions: [{ consumerIndex: 0, topicName: "orders" }],
+    consumerCapacities: [10000],
+  });
+  const topic = design.nodes.find(({ id }) => id === "queue").data.queueConfig.topics[0];
+
+  topic.estimatedFailureRatePerAttempt = 0;
+  topic.maxDeliveryRetries = 3;
+  const noFailures = runSimulation(design.nodes, design.edges, 1000).nodeMetrics.get("queue").estimatedQueueTopicBacklog[0];
+  assert.equal(noFailures.estimatedDeliveryAttemptsPerSec, 1000);
+  assert.equal(noFailures.estimatedRetryAttemptsPerSec, 0);
+  assert.equal(noFailures.estimatedSuccessfulDeliveriesPerSec, 1000);
+  assert.equal(noFailures.estimatedExhaustedDeliveriesPerSec, 0);
+  topic.estimatedRetryBackoffMs = 500;
+  assert.equal(runSimulation(design.nodes, design.edges, 1000).nodeMetrics.get("queue").estimatedQueueTopicBacklog[0].estimatedRetryWaitMsPerDelivery, 0);
+
+  topic.estimatedFailureRatePerAttempt = 1;
+  topic.maxDeliveryRetries = 0;
+  const certainFailure = runSimulation(design.nodes, design.edges, 1000).nodeMetrics.get("queue").estimatedQueueTopicBacklog[0];
+  assert.equal(certainFailure.estimatedDeliveryAttemptsPerSec, 1000);
+  assert.equal(certainFailure.estimatedRetryAttemptsPerSec, 0);
+  assert.equal(certainFailure.estimatedSuccessfulDeliveriesPerSec, 0);
+  assert.equal(certainFailure.estimatedExhaustedDeliveriesPerSec, 1000);
+  assert.equal(certainFailure.estimatedRetryWaitMsPerDelivery, 0);
+});
+
+test("queue backlog payload estimate is omitted without a size assumption and skips overflow", () => {
+  const design = makeTopicQueueDesign({
+    publishers: [{ topicName: "orders" }],
+    subscriptions: [],
+  });
+  const withoutSize = runSimulation(design.nodes, design.edges, 1000, {}, 5);
+  assert.equal(withoutSize.nodeMetrics.get("queue").estimatedQueueTopicBacklog[0].estimatedBacklogPayloadBytes, undefined);
+
+  design.nodes.find(({ id }) => id === "queue").data.queueConfig.topics[0].estimatedAverageMessageSizeBytes = Number.MAX_VALUE;
+  const overflow = runSimulation(design.nodes, design.edges, 1000, {}, Number.MAX_VALUE);
+  assert.equal(overflow.nodeMetrics.get("queue").estimatedQueueTopicBacklog[0].estimatedBacklogPayloadBytes, undefined);
+});
+
+test("unsubscribed configured topic projects all accepted topic traffic as backlog", () => {
+  const design = makeTopicQueueDesign({
+    publishers: [{ topicName: "orphan-events" }],
+    subscriptions: [],
+  });
+  const result = runSimulation(design.nodes, design.edges, 1000, {}, 5);
+  const estimate = result.nodeMetrics.get("queue").estimatedQueueTopicBacklog[0];
+
+  assert.equal(estimate.acceptedMessagesPerSec, 1000);
+  assert.equal(estimate.estimatedProcessedMessagesPerSec, 0);
+  assert.equal(estimate.estimatedBacklogGrowthPerSec, 1000);
+  assert.equal(estimate.estimatedBacklogDepth, 5000);
+  assert.equal(result.nodeMetrics.get("queue").queueBacklogQPS, 1000);
 });
 
 test("queue topic delivery does not send messages to an unsubscriber", () => {
@@ -383,6 +853,180 @@ test("competing subscribers split each topic independently", () => {
   assert.equal(result.nodeMetrics.get("queue").queueBacklogQPS, 0);
 });
 
+test("configured topic partitions cap competing-consumer backlog drain by replica parallelism", () => {
+  const design = makeTopicQueueDesign({
+    publishers: [{ topicName: "orders" }],
+    subscriptions: [
+      { consumerIndex: 0, topicName: "orders" },
+      { consumerIndex: 1, topicName: "orders" },
+    ],
+    consumerCapacities: [300, 300],
+    partitionCounts: { orders: 1 },
+  });
+  for (const consumer of design.nodes.filter(({ id }) => id.startsWith("consumer-"))) {
+    consumer.data.replicas = 2;
+  }
+
+  const result = runSimulation(design.nodes, design.edges, 1000, {}, 10);
+  assert.equal(result.nodeMetrics.get("consumer-0").incomingQPS, 500);
+  assert.equal(result.nodeMetrics.get("consumer-1").incomingQPS, 500);
+  assert.equal(result.nodeMetrics.get("queue").queueBacklogQPS, 700);
+  assert.equal(result.nodeMetrics.get("queue").queueDepth, 7000);
+  assert.ok(result.warnings.some((warning) => /orders.*1 partitions for 4 competing-consumer replica slots.*partition parallelism/i.test(warning)));
+});
+
+test("partition cap is optional and stops limiting when partitions cover replica slots", () => {
+  const makeDesign = (partitionCounts) => {
+    const design = makeTopicQueueDesign({
+      publishers: [{ topicName: "orders" }],
+      subscriptions: [
+        { consumerIndex: 0, topicName: "orders" },
+        { consumerIndex: 1, topicName: "orders" },
+      ],
+      consumerCapacities: [300, 300],
+      partitionCounts,
+    });
+    for (const consumer of design.nodes.filter(({ id }) => id.startsWith("consumer-"))) {
+      consumer.data.replicas = 2;
+    }
+    return design;
+  };
+
+  const withoutSetting = makeDesign({});
+  const withoutSettingResult = runSimulation(withoutSetting.nodes, withoutSetting.edges, 1000);
+  assert.equal(withoutSettingResult.nodeMetrics.get("queue").queueBacklogQPS, 0);
+
+  const withEnoughPartitions = makeDesign({ orders: 4 });
+  const enoughPartitionsResult = runSimulation(withEnoughPartitions.nodes, withEnoughPartitions.edges, 1000);
+  assert.equal(enoughPartitionsResult.nodeMetrics.get("queue").queueBacklogQPS, 0);
+});
+
+test("uniform hottest-partition share preserves the partition-only drain estimate", () => {
+  const makeDesign = (hotPartitionShares = {}) => {
+    const design = makeTopicQueueDesign({
+      publishers: [{ topicName: "orders" }],
+      subscriptions: [{ consumerIndex: 0, topicName: "orders" }, { consumerIndex: 1, topicName: "orders" }],
+      consumerCapacities: [300, 300],
+      partitionCounts: { orders: 4 },
+      hotPartitionShares,
+    });
+    for (const consumer of design.nodes.filter(({ id }) => id.startsWith("consumer-"))) consumer.data.replicas = 2;
+    return design;
+  };
+
+  const legacy = makeDesign();
+  const uniform = makeDesign({ orders: 0.25 });
+  assert.equal(runSimulation(legacy.nodes, legacy.edges, 1000).nodeMetrics.get("queue").queueBacklogQPS, 0);
+  assert.equal(runSimulation(uniform.nodes, uniform.edges, 1000).nodeMetrics.get("queue").queueBacklogQPS, 0);
+});
+
+test("estimated hot-partition skew reduces competing-consumer drain and reports its assumption", () => {
+  const design = makeTopicQueueDesign({
+    publishers: [{ topicName: "orders" }],
+    subscriptions: [{ consumerIndex: 0, topicName: "orders" }, { consumerIndex: 1, topicName: "orders" }],
+    consumerCapacities: [300, 300],
+    partitionCounts: { orders: 4 },
+    hotPartitionShares: { orders: 0.5 },
+  });
+  for (const consumer of design.nodes.filter(({ id }) => id.startsWith("consumer-"))) consumer.data.replicas = 2;
+
+  const result = runSimulation(design.nodes, design.edges, 1000, {}, 10);
+  assert.equal(result.nodeMetrics.get("queue").queueBacklogQPS, 400);
+  assert.equal(result.nodeMetrics.get("queue").queueDepth, 4000);
+  assert.equal(result.nodeMetrics.get("queue").estimatedQueueTopicBacklog[0].estimatedProcessedMessagesPerSec, 600);
+  assert.equal(result.nodeMetrics.get("queue").estimatedQueueTopicBacklog[0].estimatedBacklogGrowthPerSec, 400);
+  assert.ok(result.warnings.some((warning) => /orders.*50\.0%.*busiest partition.*directional skew estimate/i.test(warning)));
+});
+
+test("broadcast topic delivery ignores the competing-consumer hot-partition estimate", () => {
+  const design = makeTopicQueueDesign({
+    publishers: [{ topicName: "orders" }],
+    subscriptions: [{ consumerIndex: 0, topicName: "orders" }, { consumerIndex: 1, topicName: "orders" }],
+    deliveryMode: "broadcast",
+    partitionCounts: { orders: 1 },
+    hotPartitionShares: { orders: 0.9 },
+  });
+  const result = runSimulation(design.nodes, design.edges, 1000);
+  assert.equal(result.nodeMetrics.get("queue").queueBacklogQPS, 0);
+  assert.equal(result.warnings.some((warning) => /busiest partition/i.test(warning)), false);
+});
+
+test("queue retained-payload estimate uses accepted rate, average size, and retention", () => {
+  const design = makeTopicQueueDesign({
+    publishers: [{ topicName: "orders" }],
+    subscriptions: [{ consumerIndex: 0, topicName: "orders" }],
+    consumerCapacities: [10000],
+    retentionHoursByTopic: { orders: 24 },
+    averageMessageSizeBytesByTopic: { orders: 512 },
+  });
+  const result = runSimulation(design.nodes, design.edges, 100);
+  const estimate = result.nodeMetrics.get("queue").estimatedQueueTopicStorage[0];
+
+  assert.deepEqual(estimate, {
+    topicName: "orders",
+    acceptedMessagesPerSec: 100,
+    estimatedAverageMessageSizeBytes: 512,
+    retentionHours: 24,
+    estimatedRetainedPayloadBytes: 4_423_680_000,
+  });
+});
+
+test("queue retained-payload estimates are topic-specific and do not alter throughput or backlog", () => {
+  const makeDesign = (withEstimates) => makeTopicQueueDesign({
+    publishers: [{ topicName: "orders", trafficWeight: 3 }, { topicName: "audit", trafficWeight: 1 }],
+    subscriptions: [{ consumerIndex: 0, topicName: "orders" }, { consumerIndex: 0, topicName: "audit" }],
+    consumerCapacities: [10000],
+    ...(withEstimates ? {
+      retentionHoursByTopic: { orders: 24, audit: 48 },
+      averageMessageSizeBytesByTopic: { orders: 512, audit: 128 },
+    } : {}),
+  });
+  const withoutEstimates = makeDesign(false);
+  const configured = makeDesign(true);
+  const baseline = runSimulation(withoutEstimates.nodes, withoutEstimates.edges, 1000);
+  const result = runSimulation(configured.nodes, configured.edges, 1000);
+  const estimates = result.nodeMetrics.get("queue").estimatedQueueTopicStorage;
+
+  assert.equal(estimates.length, 2);
+  assert.deepEqual(estimates.map(({ topicName, acceptedMessagesPerSec, estimatedRetainedPayloadBytes }) => ({ topicName, acceptedMessagesPerSec, estimatedRetainedPayloadBytes })), [
+    { topicName: "orders", acceptedMessagesPerSec: 750, estimatedRetainedPayloadBytes: 750 * 512 * 24 * 3600 },
+    { topicName: "audit", acceptedMessagesPerSec: 250, estimatedRetainedPayloadBytes: 250 * 128 * 48 * 3600 },
+  ]);
+  assert.equal(result.throughput, baseline.throughput);
+  assert.equal(result.nodeMetrics.get("queue").queueBacklogQPS, baseline.nodeMetrics.get("queue").queueBacklogQPS);
+});
+
+test("queue retained-payload estimate is omitted without explicit topic rate or required settings", () => {
+  const legacy = makeQueueDesign({ consumerCapacities: [10000] });
+  const legacyResult = runSimulation(legacy.nodes, legacy.edges, 100);
+  assert.equal(legacyResult.nodeMetrics.get("queue").estimatedQueueTopicStorage, undefined);
+
+  for (const configuration of [
+    { retentionHoursByTopic: { orders: 24 } },
+    { averageMessageSizeBytesByTopic: { orders: 512 } },
+  ]) {
+    const design = makeTopicQueueDesign({
+      publishers: [{ topicName: "orders" }],
+      subscriptions: [{ consumerIndex: 0, topicName: "orders" }],
+      consumerCapacities: [10000],
+      ...configuration,
+    });
+    assert.equal(runSimulation(design.nodes, design.edges, 100).nodeMetrics.get("queue").estimatedQueueTopicStorage, undefined);
+  }
+});
+
+test("queue retained-payload estimate skips arithmetic overflow", () => {
+  const design = makeTopicQueueDesign({
+    publishers: [{ topicName: "orders" }],
+    subscriptions: [{ consumerIndex: 0, topicName: "orders" }],
+    consumerCapacities: [10000],
+    retentionHoursByTopic: { orders: Number.MAX_VALUE },
+    averageMessageSizeBytesByTopic: { orders: Number.MAX_VALUE },
+  });
+  const result = runSimulation(design.nodes, design.edges, 100);
+  assert.equal(result.nodeMetrics.get("queue").estimatedQueueTopicStorage, undefined);
+});
+
 test("queue topics without subscribers contribute to projected backlog", () => {
   const { nodes, edges } = makeTopicQueueDesign({
     publishers: [{ topicName: "orphan-events" }],
@@ -408,6 +1052,23 @@ test("topic broadcast backlog follows the slowest mapped consumer", () => {
   const result = runSimulation(nodes, edges, 1000, {}, 10);
   assert.equal(result.nodeMetrics.get("consumer-0").incomingQPS, 1000);
   assert.equal(result.nodeMetrics.get("consumer-1").incomingQPS, 1000);
+  assert.equal(result.nodeMetrics.get("queue").queueBacklogQPS, 600);
+  assert.equal(result.nodeMetrics.get("queue").estimatedQueueTopicBacklog[0].estimatedProcessedMessagesPerSec, 400);
+  assert.equal(result.nodeMetrics.get("queue").estimatedQueueTopicBacklog[0].estimatedBacklogDepth, 6000);
+});
+
+test("topic partition count does not cap broadcast delivery", () => {
+  const { nodes, edges } = makeTopicQueueDesign({
+    publishers: [{ topicName: "orders" }],
+    subscriptions: [
+      { consumerIndex: 0, topicName: "orders" },
+      { consumerIndex: 1, topicName: "orders" },
+    ],
+    consumerCapacities: [1000, 400],
+    deliveryMode: "broadcast",
+    partitionCounts: { orders: 1 },
+  });
+  const result = runSimulation(nodes, edges, 1000, {}, 10);
   assert.equal(result.nodeMetrics.get("queue").queueBacklogQPS, 600);
 });
 

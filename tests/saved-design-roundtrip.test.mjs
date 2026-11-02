@@ -145,7 +145,7 @@ test("saved-design export/import/load preserves runtime contracts and edge metad
         scalable: true,
         queueDeliveryMode: "competing",
         queueConfig: {
-          topics: [{ id: "topic", name: "parking-events", retentionHours: 24 }],
+          topics: [{ id: "topic", name: "parking-events", retentionHours: 24, partitionCount: 8, estimatedHotPartitionTrafficShare: 0.375, estimatedAverageMessageSizeBytes: 512, estimatedFailureRatePerAttempt: 0.08, maxDeliveryRetries: 4, estimatedRetryBackoffMs: 400 }],
           subscriptions: [{ id: "subscription", consumerNodeId: "db", topicName: "parking-events" }],
         },
       },
@@ -163,6 +163,19 @@ test("saved-design export/import/load preserves runtime contracts and edge metad
         maxQPS: 10000,
         latencyMs: 30,
         scalable: false,
+        databaseReplicationEstimate: {
+          estimatedReadReplicaCount: 3,
+          estimatedReadTrafficToReplicasShare: 0.75,
+          estimatedReplicationLagMs: 250,
+          maximumToleratedReadStalenessMs: 1000,
+        },
+        tables: [{
+          id: "table",
+          name: "parking_spots",
+          columns: [{ id: "spot", name: "spotId", dataType: "UUID", nullable: false, primaryKey: true }],
+          indexes: [],
+          partitioning: { strategy: "hash", keyColumn: "spotId", shardCount: 8, hotKeyTrafficShare: 0.1, estimatedWorkCapacityPerShard: 1200 },
+        }],
       },
     },
   ];
@@ -175,6 +188,12 @@ test("saved-design export/import/load preserves runtime contracts and edge metad
   const serializedEdges = serializeEdges(useCanvasStore.getState().edges);
   assert.deepEqual(serializedNodes[0].data.endpoints, canvasState.nodes[0].data.endpoints);
   assert.deepEqual(serializedNodes[1].data.queueConfig, canvasState.nodes[1].data.queueConfig);
+  assert.deepEqual(serializedNodes[2].data.databaseReplicationEstimate, {
+    estimatedReadReplicaCount: 3,
+    estimatedReadTrafficToReplicasShare: 0.75,
+    estimatedReplicationLagMs: 250,
+    maximumToleratedReadStalenessMs: 1000,
+  });
   assert.equal(serializedEdges[1].data.async, true);
 
   useSavedDesignsStore.getState().saveDesign("Parking Runtime Contracts");
@@ -186,6 +205,19 @@ test("saved-design export/import/load preserves runtime contracts and edge metad
   const imported = useSavedDesignsStore.getState().designs[0];
   assert.equal(imported.nodes[0].data.endpoints[0].requestFields[0].name, "lotId");
   assert.equal(imported.nodes[1].data.queueConfig.subscriptions[0].topicName, "parking-events");
+  assert.equal(imported.nodes[1].data.queueConfig.topics[0].partitionCount, 8);
+  assert.equal(imported.nodes[1].data.queueConfig.topics[0].estimatedHotPartitionTrafficShare, 0.375);
+  assert.equal(imported.nodes[1].data.queueConfig.topics[0].estimatedAverageMessageSizeBytes, 512);
+  assert.equal(imported.nodes[1].data.queueConfig.topics[0].estimatedFailureRatePerAttempt, 0.08);
+  assert.equal(imported.nodes[1].data.queueConfig.topics[0].maxDeliveryRetries, 4);
+  assert.equal(imported.nodes[1].data.queueConfig.topics[0].estimatedRetryBackoffMs, 400);
+  assert.deepEqual(imported.nodes[2].data.tables[0].partitioning, { strategy: "hash", keyColumn: "spotId", shardCount: 8, hotKeyTrafficShare: 0.1, estimatedWorkCapacityPerShard: 1200 });
+  assert.deepEqual(imported.nodes[2].data.databaseReplicationEstimate, {
+    estimatedReadReplicaCount: 3,
+    estimatedReadTrafficToReplicasShare: 0.75,
+    estimatedReplicationLagMs: 250,
+    maximumToleratedReadStalenessMs: 1000,
+  });
   assert.equal(imported.edges[1].data.protocol, "pubsub");
   assert.equal(imported.edges[1].data.async, true);
 
@@ -193,6 +225,19 @@ test("saved-design export/import/load preserves runtime contracts and edge metad
   assert.equal(canvasState.lastTab.id, "my-design");
   assert.equal(canvasState.lastTab.nodes[0].data.endpoints[0].path, "/lots/:lotId/availability");
   assert.equal(canvasState.lastTab.nodes[1].data.queueConfig.subscriptions[0].consumerNodeId, "db");
+  assert.equal(canvasState.lastTab.nodes[1].data.queueConfig.topics[0].partitionCount, 8);
+  assert.equal(canvasState.lastTab.nodes[1].data.queueConfig.topics[0].estimatedHotPartitionTrafficShare, 0.375);
+  assert.equal(canvasState.lastTab.nodes[1].data.queueConfig.topics[0].estimatedAverageMessageSizeBytes, 512);
+  assert.equal(canvasState.lastTab.nodes[1].data.queueConfig.topics[0].estimatedFailureRatePerAttempt, 0.08);
+  assert.equal(canvasState.lastTab.nodes[1].data.queueConfig.topics[0].maxDeliveryRetries, 4);
+  assert.equal(canvasState.lastTab.nodes[1].data.queueConfig.topics[0].estimatedRetryBackoffMs, 400);
+  assert.deepEqual(canvasState.lastTab.nodes[2].data.tables[0].partitioning, { strategy: "hash", keyColumn: "spotId", shardCount: 8, hotKeyTrafficShare: 0.1, estimatedWorkCapacityPerShard: 1200 });
+  assert.deepEqual(canvasState.lastTab.nodes[2].data.databaseReplicationEstimate, {
+    estimatedReadReplicaCount: 3,
+    estimatedReadTrafficToReplicasShare: 0.75,
+    estimatedReplicationLagMs: 250,
+    maximumToleratedReadStalenessMs: 1000,
+  });
   assert.equal(canvasState.lastTab.edges[1].data.async, true);
   assert.equal(appState.selectedProblemId, "parking-lot");
   assert.equal(penState.strokes.length, 1);

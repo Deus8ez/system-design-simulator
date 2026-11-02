@@ -3,6 +3,8 @@ import type {
   CacheEvictionPolicy,
   DatabaseColumn,
   DatabaseIndex,
+  DatabasePartitioningConfiguration,
+  DatabaseReplicationEstimate,
   DatabaseTable,
   EndpointDefinition,
   EndpointFieldDefinition,
@@ -24,6 +26,7 @@ export interface SerializedComponentConfiguration {
   endpoints?: EndpointDefinition[];
   routes?: GatewayRouteDefinition[];
   cacheConfig?: CacheConfiguration;
+  databaseReplicationEstimate?: DatabaseReplicationEstimate;
   tables?: DatabaseTable[];
   queueConfig?: QueueConfiguration;
   queueDeliveryMode?: QueueDeliveryMode;
@@ -145,6 +148,22 @@ function normalizeQueueConfiguration(raw: unknown): QueueConfiguration | undefin
     id: str(topic.id, `topic-${index}`),
     name: str(topic.name, ""),
     retentionHours: typeof topic.retentionHours === "number" ? topic.retentionHours : undefined,
+    partitionCount: typeof topic.partitionCount === "number" ? topic.partitionCount : undefined,
+    estimatedHotPartitionTrafficShare: typeof topic.estimatedHotPartitionTrafficShare === "number"
+      ? topic.estimatedHotPartitionTrafficShare
+      : undefined,
+    estimatedAverageMessageSizeBytes: typeof topic.estimatedAverageMessageSizeBytes === "number"
+      ? topic.estimatedAverageMessageSizeBytes
+      : undefined,
+    estimatedFailureRatePerAttempt: typeof topic.estimatedFailureRatePerAttempt === "number"
+      ? topic.estimatedFailureRatePerAttempt
+      : undefined,
+    maxDeliveryRetries: typeof topic.maxDeliveryRetries === "number"
+      ? topic.maxDeliveryRetries
+      : undefined,
+    estimatedRetryBackoffMs: typeof topic.estimatedRetryBackoffMs === "number"
+      ? topic.estimatedRetryBackoffMs
+      : undefined,
   }));
   const subscriptions = Array.isArray(raw.subscriptions)
     ? raw.subscriptions.map((candidate, index) => {
@@ -208,6 +227,21 @@ function normalizeTables(raw: unknown): DatabaseTable[] | undefined {
         unique: index.unique === true,
       }))
       .filter((index) => index.columns.length > 0);
+    const partitioning: DatabasePartitioningConfiguration | undefined = isRecord(table.partitioning)
+      ? {
+          strategy: typeof table.partitioning.strategy === "string"
+            ? table.partitioning.strategy as DatabasePartitioningConfiguration["strategy"]
+            : "hash",
+          keyColumn: str(table.partitioning.keyColumn, ""),
+          shardCount: typeof table.partitioning.shardCount === "number" ? table.partitioning.shardCount : 0,
+          hotKeyTrafficShare: typeof table.partitioning.hotKeyTrafficShare === "number"
+            ? table.partitioning.hotKeyTrafficShare
+            : 0,
+          estimatedWorkCapacityPerShard: typeof table.partitioning.estimatedWorkCapacityPerShard === "number"
+            ? table.partitioning.estimatedWorkCapacityPerShard
+            : undefined,
+        }
+      : undefined;
     return {
       id: str(table.id, `table-${tableIndex}`),
       name: str(table.name, `table_${tableIndex + 1}`),
@@ -216,6 +250,7 @@ function normalizeTables(raw: unknown): DatabaseTable[] | undefined {
         : 1000,
       columns,
       indexes,
+      partitioning,
     };
   });
 }
@@ -227,6 +262,20 @@ export function normalizeComponentConfiguration(raw: unknown): SerializedCompone
     endpoints: normalizeEndpoints(data.endpoints),
     routes: normalizeGatewayRoutes(data.routes),
     cacheConfig: normalizeCacheConfiguration(data.cacheConfig),
+    databaseReplicationEstimate: isRecord(data.databaseReplicationEstimate) && typeof data.databaseReplicationEstimate.estimatedReadReplicaCount === "number"
+      ? {
+          estimatedReadReplicaCount: data.databaseReplicationEstimate.estimatedReadReplicaCount,
+          ...(typeof data.databaseReplicationEstimate.estimatedReadTrafficToReplicasShare === "number"
+            ? { estimatedReadTrafficToReplicasShare: data.databaseReplicationEstimate.estimatedReadTrafficToReplicasShare }
+            : {}),
+          ...(typeof data.databaseReplicationEstimate.estimatedReplicationLagMs === "number"
+            ? { estimatedReplicationLagMs: data.databaseReplicationEstimate.estimatedReplicationLagMs }
+            : {}),
+          ...(typeof data.databaseReplicationEstimate.maximumToleratedReadStalenessMs === "number"
+            ? { maximumToleratedReadStalenessMs: data.databaseReplicationEstimate.maximumToleratedReadStalenessMs }
+            : {}),
+        }
+      : undefined,
     tables: normalizeTables(data.tables),
     queueConfig: normalizeQueueConfiguration(data.queueConfig),
     queueDeliveryMode: data.queueDeliveryMode === "competing" ? "competing" : "broadcast",
@@ -241,6 +290,20 @@ export function serializeComponentConfiguration(raw: unknown): SerializedCompone
     endpoints: Array.isArray(data.endpoints) ? data.endpoints as EndpointDefinition[] : undefined,
     routes: Array.isArray(data.routes) ? data.routes as GatewayRouteDefinition[] : undefined,
     cacheConfig: isRecord(data.cacheConfig) ? data.cacheConfig as CacheConfiguration : undefined,
+    databaseReplicationEstimate: isRecord(data.databaseReplicationEstimate) && typeof data.databaseReplicationEstimate.estimatedReadReplicaCount === "number"
+      ? {
+          estimatedReadReplicaCount: data.databaseReplicationEstimate.estimatedReadReplicaCount,
+          ...(typeof data.databaseReplicationEstimate.estimatedReadTrafficToReplicasShare === "number"
+            ? { estimatedReadTrafficToReplicasShare: data.databaseReplicationEstimate.estimatedReadTrafficToReplicasShare }
+            : {}),
+          ...(typeof data.databaseReplicationEstimate.estimatedReplicationLagMs === "number"
+            ? { estimatedReplicationLagMs: data.databaseReplicationEstimate.estimatedReplicationLagMs }
+            : {}),
+          ...(typeof data.databaseReplicationEstimate.maximumToleratedReadStalenessMs === "number"
+            ? { maximumToleratedReadStalenessMs: data.databaseReplicationEstimate.maximumToleratedReadStalenessMs }
+            : {}),
+        }
+      : undefined,
     tables: Array.isArray(data.tables) ? data.tables as DatabaseTable[] : undefined,
     queueConfig: normalizeQueueConfiguration(data.queueConfig),
     queueDeliveryMode: data.queueDeliveryMode === "competing" ? "competing" : "broadcast",

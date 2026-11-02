@@ -39,6 +39,12 @@ test("component runtime configuration survives serialize and import normalizatio
       defaultTtlSeconds: 300,
       evictionPolicy: "allkeys-lru",
     },
+    databaseReplicationEstimate: {
+      estimatedReadReplicaCount: 3,
+      estimatedReadTrafficToReplicasShare: 0.8,
+      estimatedReplicationLagMs: 250,
+      maximumToleratedReadStalenessMs: 1000,
+    },
     tables: [{
       id: "items-table",
       name: "items",
@@ -48,9 +54,10 @@ test("component runtime configuration survives serialize and import normalizatio
         { id: "item-title", name: "title", dataType: "TEXT", nullable: false, primaryKey: false },
       ],
       indexes: [{ id: "items-id-index", name: "items_id_idx", columns: ["id"], unique: true }],
+        partitioning: { strategy: "hash", keyColumn: "id", shardCount: 16, hotKeyTrafficShare: 0.2 },
     }],
     queueConfig: {
-      topics: [{ id: "topic-created", name: "item-created", retentionHours: 240 }],
+      topics: [{ id: "topic-created", name: "item-created", retentionHours: 240, partitionCount: 12, estimatedFailureRatePerAttempt: 0.1, maxDeliveryRetries: 3, estimatedRetryBackoffMs: 250 }],
       subscriptions: [{
         id: "subscription-created-analytics",
         consumerNodeId: "analytics-worker",
@@ -116,4 +123,60 @@ test("import normalization keeps malformed queue subscriptions repairable", () =
     consumerNodeId: "",
     topicName: "",
   }]);
+});
+
+test("queue partition, payload-size, and retry estimates round-trip and remain absent for legacy topics", () => {
+  const imported = normalizeComponentConfiguration({
+    queueConfig: { topics: [{ id: "partitioned", name: "orders", partitionCount: 8, estimatedHotPartitionTrafficShare: 0.375, estimatedAverageMessageSizeBytes: 512, estimatedFailureRatePerAttempt: 0.1, maxDeliveryRetries: 3, estimatedRetryBackoffMs: 250 }] },
+  });
+  assert.equal(imported.queueConfig.topics[0].partitionCount, 8);
+  assert.equal(imported.queueConfig.topics[0].estimatedHotPartitionTrafficShare, 0.375);
+  assert.equal(imported.queueConfig.topics[0].estimatedAverageMessageSizeBytes, 512);
+  assert.equal(imported.queueConfig.topics[0].estimatedFailureRatePerAttempt, 0.1);
+  assert.equal(imported.queueConfig.topics[0].maxDeliveryRetries, 3);
+  assert.equal(imported.queueConfig.topics[0].estimatedRetryBackoffMs, 250);
+
+  const legacy = normalizeComponentConfiguration({
+    queueConfig: { topics: [{ id: "legacy", name: "events" }] },
+  });
+  assert.equal(legacy.queueConfig.topics[0].partitionCount, undefined);
+  assert.equal(legacy.queueConfig.topics[0].estimatedHotPartitionTrafficShare, undefined);
+  assert.equal(legacy.queueConfig.topics[0].estimatedAverageMessageSizeBytes, undefined);
+  assert.equal(legacy.queueConfig.topics[0].estimatedFailureRatePerAttempt, undefined);
+  assert.equal(legacy.queueConfig.topics[0].maxDeliveryRetries, undefined);
+  assert.equal(legacy.queueConfig.topics[0].estimatedRetryBackoffMs, undefined);
+});
+
+test("table hash partitioning round-trips and remains absent for legacy schemas", () => {
+  const partitioned = normalizeComponentConfiguration({
+    tables: [{
+      id: "table",
+      name: "orders",
+      columns: [{ id: "account", name: "accountId" }],
+      indexes: [],
+      partitioning: { strategy: "hash", keyColumn: "accountId", shardCount: 12, hotKeyTrafficShare: 0.15, estimatedWorkCapacityPerShard: 900 },
+    }],
+  });
+  assert.deepEqual(partitioned.tables[0].partitioning, {
+    strategy: "hash",
+    keyColumn: "accountId",
+    shardCount: 12,
+    hotKeyTrafficShare: 0.15,
+    estimatedWorkCapacityPerShard: 900,
+  });
+
+  const legacy = normalizeComponentConfiguration({
+    tables: [{ id: "legacy", name: "events", columns: [], indexes: [] }],
+  });
+  assert.equal(legacy.tables[0].partitioning, undefined);
+});
+
+test("database read-copy estimate round-trips and remains absent for legacy configurations", () => {
+  const configured = normalizeComponentConfiguration({
+    databaseReplicationEstimate: { estimatedReadReplicaCount: 4 },
+  });
+  assert.deepEqual(configured.databaseReplicationEstimate, { estimatedReadReplicaCount: 4 });
+
+  const legacy = normalizeComponentConfiguration({ componentId: "sql-db" });
+  assert.equal(legacy.databaseReplicationEstimate, undefined);
 });

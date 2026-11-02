@@ -65,6 +65,38 @@ export function getTutorialGuidance(step: TutorialStep): TutorialGuidanceStep[] 
         ] : []),
       ];
     }
+    case "database-partitioning":
+      return [
+        { instruction: `Select ${objective.databaseComponentId.replaceAll("-", " ")} on the canvas and open Props. In ${objective.tableName}, choose Configure hash partitioning.`, target: { kind: "control", id: "database-partitioning-add", componentId: objective.databaseComponentId } },
+        { instruction: `Set the partition key to ${objective.keyColumn}. This key is chosen for the access pattern, but a popular value can concentrate work on one shard.`, target: { kind: "control", id: "database-partition-key", componentId: objective.databaseComponentId }, value: objective.keyColumn },
+        { instruction: `Set the shard count to at least ${objective.minimumShards}.`, target: { kind: "control", id: "database-shard-count", componentId: objective.databaseComponentId }, value: String(objective.minimumShards) },
+        { instruction: `Estimate the hottest key as at least ${(objective.minimumHotKeyTrafficShare * 100).toFixed(0)}% of table traffic for this scenario.`, target: { kind: "control", id: "database-hot-key-share", componentId: objective.databaseComponentId }, value: String(objective.minimumHotKeyTrafficShare * 100) },
+        ...(objective.minimumEstimatedWorkCapacityPerShard === undefined ? [] : [{
+          instruction: `Enter ${objective.minimumEstimatedWorkCapacityPerShard} work/s as this scenario's illustrative estimated capacity for one shard. This assumption enables a directional hot-shard pressure estimate; it does not change aggregate database capacity.`,
+          target: { kind: "control" as const, id: "database-shard-capacity", componentId: objective.databaseComponentId },
+          value: String(objective.minimumEstimatedWorkCapacityPerShard),
+        }]),
+      ];
+    case "database-read-replicas":
+      return [
+        { instruction: `Select ${objective.databaseComponentId.replaceAll("-", " ")} on the canvas and open Props. Configure the read-replica capacity estimate if it is not already enabled.`, target: { kind: "control", id: "database-read-replica-configure", componentId: objective.databaseComponentId } },
+        { instruction: `Set assumed additional read-serving copies to at least ${objective.minimumReplicas}.`, target: { kind: "control", id: "database-read-replica-count", componentId: objective.databaseComponentId }, value: String(objective.minimumReplicas) },
+        ...(objective.requiredReadTrafficToReplicasShare === undefined ? [] : [{
+          instruction: `Set the hypothetical share of modeled read work served by these copies to ${(objective.requiredReadTrafficToReplicasShare * 100).toFixed(0)}%. Then run the scenario and compare the estimated primary read+write work with copy read work and capacity. This is capacity planning only; it does not route reads or model freshness/failover.`,
+          target: { kind: "control" as const, id: "database-read-replica-share", componentId: objective.databaseComponentId },
+          value: String(objective.requiredReadTrafficToReplicasShare * 100),
+        }]),
+        ...(objective.requiredEstimatedReplicationLagMs === undefined ? [] : [{
+          instruction: `Enter ${objective.requiredEstimatedReplicationLagMs} ms as an explicit lag assumption for this scenario. This is not a measured or simulated replication lag.`,
+          target: { kind: "control" as const, id: "database-replication-lag", componentId: objective.databaseComponentId },
+          value: String(objective.requiredEstimatedReplicationLagMs),
+        }]),
+        ...(objective.requiredMaximumToleratedReadStalenessMs === undefined ? [] : [{
+          instruction: `Enter ${objective.requiredMaximumToleratedReadStalenessMs} ms as this scenario's read-staleness budget.`,
+          target: { kind: "control" as const, id: "database-read-staleness-budget", componentId: objective.databaseComponentId },
+          value: String(objective.requiredMaximumToleratedReadStalenessMs),
+        }]),
+      ];
     case "cache-behavior": {
       const readEndpointIndex = objective.readEndpoint.method === "GET" ? 0 : 1;
       const writeEndpointIndex = objective.writeEndpoint.method === "GET" ? 0 : 1;
@@ -117,6 +149,35 @@ export function getTutorialGuidance(step: TutorialStep): TutorialGuidanceStep[] 
         ] : []),
       ];
     }
+    case "queue-retention":
+      return [
+        { instruction: "Select Message Queue on the canvas and open Props. Under Topics, locate the matching topic's retention-hours field.", target: { kind: "control", id: "queue-topic-retention", componentId: objective.queueComponentId } },
+        { instruction: `Set “${objective.topicName}” retention to at least ${objective.minimumRetentionHours} hours for this scenario's recovery window.`, target: { kind: "control", id: "queue-topic-retention", componentId: objective.queueComponentId }, value: String(objective.minimumRetentionHours) },
+      ];
+    case "queue-partitions":
+      return [
+        { instruction: "Select Message Queue on the canvas and open Props. Under Topics, locate the matching topic's partition-count field.", target: { kind: "control", id: "queue-topic-partitions", componentId: objective.queueComponentId } },
+        { instruction: `Set “${objective.topicName}” to at least ${objective.minimumPartitions} partitions, then compare the partition count with competing-consumer replicas.`, target: { kind: "control", id: "queue-topic-partitions", componentId: objective.queueComponentId }, value: String(objective.minimumPartitions) },
+        ...(objective.minimumHotPartitionTrafficShare === undefined ? [] : [{
+          instruction: `Enter at least ${(objective.minimumHotPartitionTrafficShare * 100).toFixed(0)}% as the estimated traffic share for the busiest partition of “${objective.topicName}”. The estimate must be at least the uniform share and changes only the competing-consumer backlog projection.`,
+          target: { kind: "control" as const, id: "queue-topic-hot-partition-share", componentId: objective.queueComponentId },
+          value: String(objective.minimumHotPartitionTrafficShare * 100),
+        }]),
+        ...(objective.minimumEstimatedAverageMessageSizeBytes === undefined ? [] : [{
+          instruction: `Enter at least ${objective.minimumEstimatedAverageMessageSizeBytes} bytes as the estimated average message size for “${objective.topicName}”. This supports only a logical payload estimate for the projected backlog; it is not broker storage sizing.`,
+          target: { kind: "control" as const, id: "queue-topic-message-size", componentId: objective.queueComponentId },
+          value: String(objective.minimumEstimatedAverageMessageSizeBytes),
+        }]),
+      ];
+    case "queue-retry-estimate":
+      return [
+        { instruction: "Select Message Queue on the canvas and open Props. Under Topics, find the assumed delivery failure-rate field.", target: { kind: "control", id: "queue-topic-failure-rate", componentId: objective.queueComponentId } },
+        { instruction: `Set “${objective.topicName}” to an assumed ${(objective.assumedFailureRatePerAttempt * 100).toFixed(0)}% independent failure probability per attempt.`, target: { kind: "control", id: "queue-topic-failure-rate", componentId: objective.queueComponentId }, value: String(objective.assumedFailureRatePerAttempt * 100) },
+        { instruction: `Set its maximum to at least ${objective.minimumMaxDeliveryRetries} additional retries, then set the fixed delay to ${objective.assumedRetryBackoffMs} ms. Inspect the supplementary attempt and expected-wait estimates; no retry schedule is executed.`, target: { kind: "control", id: "queue-topic-retries", componentId: objective.queueComponentId }, value: String(objective.minimumMaxDeliveryRetries) },
+        { instruction: `Enter ${objective.assumedRetryBackoffMs} ms as the assumed fixed delay before each retry. This estimates expected waiting time only and does not affect simulated latency or backlog.`, target: { kind: "control", id: "queue-topic-retry-backoff", componentId: objective.queueComponentId }, value: String(objective.assumedRetryBackoffMs) },
+      ];
+    case "reflection":
+      return [{ instruction: `${objective.prompt} ${objective.limitation} Mark this step complete only after considering both sides of the trade-off; the simulator cannot grade the explanation.` }];
     case "rate-limit-policy":
       return [
         { instruction: `Select the Rate Limiter and open Props. Choose ${objective.algorithm} in Algorithm and ${objective.keyBy} in Key by.`, target: { kind: "node", componentId: objective.componentId } },

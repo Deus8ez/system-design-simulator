@@ -113,6 +113,18 @@ export interface QueueTopicDefinition {
   id: string;
   name: string;
   retentionHours?: number;
+  /** Optional partition count used for an aggregate competing-consumer parallelism estimate. */
+  partitionCount?: number;
+  /** Estimated fraction of topic traffic assigned to its busiest partition (0–1); backlog estimate only. */
+  estimatedHotPartitionTrafficShare?: number;
+  /** Estimated average serialized payload size; used only for retained payload sizing. */
+  estimatedAverageMessageSizeBytes?: number;
+  /** Assumed independent failure probability per delivery attempt; estimate only. */
+  estimatedFailureRatePerAttempt?: number;
+  /** Number of additional attempts assumed after the initial delivery attempt (0–5). */
+  maxDeliveryRetries?: number;
+  /** Optional fixed delay assumed before each additional attempt, in milliseconds. */
+  estimatedRetryBackoffMs?: number;
 }
 
 export interface QueueConsumerSubscription {
@@ -142,6 +154,28 @@ export interface DatabaseIndex {
   unique: boolean;
 }
 
+/** Hash-shard distribution inputs used for a directional hot-partition warning. */
+export interface DatabasePartitioningConfiguration {
+  strategy: "hash";
+  keyColumn: string;
+  shardCount: number;
+  /** Estimated fraction of this table's traffic addressed to its hottest key, from 0 to 1. */
+  hotKeyTrafficShare: number;
+  /** Optional modeled work capacity of one shard, used only for a directional pressure estimate. */
+  estimatedWorkCapacityPerShard?: number;
+}
+
+/** Additional identical read-serving copies assumed for a capacity-only estimate. */
+export interface DatabaseReplicationEstimate {
+  estimatedReadReplicaCount: number;
+  /** Assumed share of modeled read work served by the extra copies, from 0 to 1; estimate only. */
+  estimatedReadTrafficToReplicasShare?: number;
+  /** User-supplied directional lag assumption; not measured or simulated. */
+  estimatedReplicationLagMs?: number;
+  /** Scenario-specific maximum acceptable staleness for replica-served reads. */
+  maximumToleratedReadStalenessMs?: number;
+}
+
 export interface DatabaseTable {
   id: string;
   name: string;
@@ -149,6 +183,7 @@ export interface DatabaseTable {
   estimatedRows?: number;
   columns: DatabaseColumn[];
   indexes: DatabaseIndex[];
+  partitioning?: DatabasePartitioningConfiguration;
 }
 
 export type QueueDeliveryMode = "broadcast" | "competing";

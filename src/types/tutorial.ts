@@ -37,6 +37,23 @@ export type TutorialObjective =
       indexedColumns?: string[];
     }
   | {
+      kind: "database-partitioning";
+      databaseComponentId: string;
+      tableName: string;
+      keyColumn: string;
+      minimumShards: number;
+      minimumHotKeyTrafficShare: number;
+      minimumEstimatedWorkCapacityPerShard?: number;
+    }
+  | {
+      kind: "database-read-replicas";
+      databaseComponentId: string;
+      minimumReplicas: number;
+      requiredReadTrafficToReplicasShare?: number;
+      requiredEstimatedReplicationLagMs?: number;
+      requiredMaximumToleratedReadStalenessMs?: number;
+    }
+  | {
       kind: "cache-behavior";
       serviceComponentId: string;
       cacheComponentId: string;
@@ -51,6 +68,33 @@ export type TutorialObjective =
       consumerComponentId: string;
       topicName: string;
       deliveryMode?: "broadcast" | "competing";
+    }
+  | {
+      kind: "queue-retention";
+      queueComponentId: string;
+      topicName: string;
+      minimumRetentionHours: number;
+    }
+  | {
+      kind: "queue-partitions";
+      queueComponentId: string;
+      topicName: string;
+      minimumPartitions: number;
+      minimumHotPartitionTrafficShare?: number;
+      minimumEstimatedAverageMessageSizeBytes?: number;
+    }
+  | {
+      kind: "queue-retry-estimate";
+      queueComponentId: string;
+      topicName: string;
+      assumedFailureRatePerAttempt: number;
+      minimumMaxDeliveryRetries: number;
+      assumedRetryBackoffMs: number;
+    }
+  | {
+      kind: "reflection";
+      prompt: string;
+      limitation: string;
     }
   | {
       kind: "queue-contract";
