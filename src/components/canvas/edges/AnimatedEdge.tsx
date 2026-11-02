@@ -9,7 +9,8 @@ import {
 } from "@xyflow/react";
 import { useSimulationStore } from "@/store/simulationStore";
 import { useAppStore } from "@/store/appStore";
-import type { CustomEdgeData } from "@/store/canvasStore";
+import { useTutorialStore } from "@/store/tutorialStore";
+import { useCanvasStore, type ComponentNodeData, type CustomEdgeData } from "@/store/canvasStore";
 
 const protocolBadge: Record<string, { text: string; color: string } | null> = {
   http: null,
@@ -31,6 +32,8 @@ function AnimatedEdgeInner({
   style,
   markerEnd,
   data,
+  source,
+  target,
 }: EdgeProps) {
   const isRunning = useSimulationStore((s) => s.isRunning);
   const hasResult = useSimulationStore((s) => s.result !== null);
@@ -38,8 +41,17 @@ function AnimatedEdgeInner({
   // compute window), so the canvas visibly "comes alive" after you Simulate.
   const flowing = isRunning || hasResult;
   const isDark = useAppStore((s) => s.theme) === "dark";
+  const tutorialHighlight = useTutorialStore((s) => s.highlightTarget);
+  const nodes = useCanvasStore((s) => s.nodes);
   const idleStroke = isDark ? "rgba(150, 165, 195, 0.32)" : "rgba(90, 105, 130, 0.45)";
   const edgeData = (data ?? {}) as CustomEdgeData;
+  const sourceNode = nodes.find((node) => node.id === source && node.type !== "text");
+  const targetNode = nodes.find((node) => node.id === target && node.type !== "text");
+  const sourceComponentId = sourceNode ? (sourceNode.data as ComponentNodeData).componentId : undefined;
+  const targetComponentId = targetNode ? (targetNode.data as ComponentNodeData).componentId : undefined;
+  const isHighlighted = tutorialHighlight?.kind === "edge" &&
+    tutorialHighlight.sourceComponentId === sourceComponentId &&
+    tutorialHighlight.targetComponentId === targetComponentId;
   const isAsync = edgeData.async === true;
   const protocol = edgeData.protocol;
   const label = edgeData.label;
@@ -63,10 +75,13 @@ function AnimatedEdgeInner({
         id={id}
         path={edgePath}
         markerEnd={markerEnd}
+        data-tutorial-target={`edge:${sourceComponentId}:${source}:${targetComponentId}:${target}`}
+        data-tutorial-highlight={isHighlighted ? "true" : undefined}
         style={{
           ...style,
-          stroke: flowing ? "rgba(52, 211, 230, 0.55)" : idleStroke,
-          strokeWidth: flowing ? 1.75 : 1.5,
+          stroke: isHighlighted ? "#fbbf24" : flowing ? "rgba(52, 211, 230, 0.55)" : idleStroke,
+          strokeWidth: isHighlighted ? 3.5 : flowing ? 1.75 : 1.5,
+          ...(isHighlighted ? { filter: "drop-shadow(0 0 7px rgba(251,191,36,0.95))" } : {}),
           ...(isAsync ? { strokeDasharray: "6 4" } : {}),
         }}
       />

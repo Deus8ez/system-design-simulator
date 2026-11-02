@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Edge, Node } from "@xyflow/react";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { BookOpen, Check, ChevronRight, Lightbulb, Play, RotateCcw, X } from "lucide-react";
@@ -12,15 +12,18 @@ import { useCanvasStore, type ComponentNodeData, type CustomEdgeData } from "@/s
 import { useSimulationStore } from "@/store/simulationStore";
 import { useTutorialStore } from "@/store/tutorialStore";
 import type { TutorialLevelId } from "@/types/tutorial";
+import { getTutorialGuidance } from "@/lib/tutorialGuidance";
+import type { TutorialHighlightTarget } from "@/store/tutorialStore";
 
 const LEVEL_ORDER: TutorialLevelId[] = ["low", "medium", "high"];
 
 interface TutorialCoachProps {
   onRunScenario: (requestsPerSec: number) => void;
   onResetCanvas: () => void;
+  onNavigateToTarget: (target: TutorialHighlightTarget) => void;
 }
 
-export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachProps) {
+export function TutorialCoach({ onRunScenario, onResetCanvas, onNavigateToTarget }: TutorialCoachProps) {
   const activeProblemId = useTutorialStore((state) => state.activeProblemId);
   const progressByProblem = useTutorialStore((state) => state.progressByProblem);
   const completeStep = useTutorialStore((state) => state.completeStep);
@@ -29,6 +32,7 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
   const isHidden = useTutorialStore((state) => state.isHidden);
   const showTutorial = useTutorialStore((state) => state.show);
   const hideTutorial = useTutorialStore((state) => state.hide);
+  const setHighlightTarget = useTutorialStore((state) => state.setHighlightTarget);
   const activeTabId = useCanvasStore((state) => state.activeTabId);
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
@@ -37,6 +41,8 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
   const simulationConfigQps = useSimulationStore((state) => state.config.requestsPerSec);
   const [feedback, setFeedback] = useState<{ contextKey: string; ok: boolean; message: string } | null>(null);
   const [hintContext, setHintContext] = useState<string | null>(null);
+  const [detailedHintContext, setDetailedHintContext] = useState<string | null>(null);
+  const [activeGuidanceIndex, setActiveGuidanceIndex] = useState(0);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
   const tutorial = activeProblemId ? TUTORIAL_BY_PROBLEM_ID.get(activeProblemId) : undefined;
@@ -47,6 +53,42 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
   const currentStep = level?.steps.find((step) => !completedIds.includes(step.id));
   const problemTitle = PROBLEMS.find((problem) => problem.id === activeProblemId)?.title ?? activeProblemId;
   const currentObjectiveKey = `${activeProblemId ?? ""}:${level?.id ?? ""}:${currentStep?.id ?? ""}`;
+  const guidance = currentStep ? getTutorialGuidance(currentStep) : [];
+
+  useEffect(() => {
+    setHighlightTarget(null);
+  }, [activeTabId, currentObjectiveKey, setHighlightTarget]);
+
+  const focusGuidanceTarget = (index: number) => {
+    const item = guidance[index];
+    if (!item?.target) return;
+    setActiveGuidanceIndex(index);
+    setHighlightTarget(item.target);
+    onNavigateToTarget(item.target);
+    const currentTarget = item.target;
+    const state = useCanvasStore.getState();
+    const instanceFor = (componentId: string, occurrence = 0) => state.nodes.filter((node) =>
+      node.type !== "text" && (node.data as ComponentNodeData).componentId === componentId,
+    )[occurrence];
+    const targetId = currentTarget.kind === "control"
+      ? `control:${currentTarget.id}`
+      : currentTarget.kind === "edge"
+        ? (() => {
+            const sourceNode = instanceFor(currentTarget.sourceComponentId);
+            const targetNode = instanceFor(currentTarget.targetComponentId);
+            return `edge:${currentTarget.sourceComponentId}:${sourceNode?.id}:${currentTarget.targetComponentId}:${targetNode?.id}`;
+          })()
+        : (() => {
+            const node = instanceFor(currentTarget.componentId);
+            return `${currentTarget.kind}:${currentTarget.componentId}${currentTarget.kind === "node" && node ? `:${node.id}` : ""}`;
+          })();
+    window.requestAnimationFrame(() => {
+      const targetMatches = Array.from(document.querySelectorAll<HTMLElement>("[data-tutorial-target]"))
+        .filter((element) => element.dataset.tutorialTarget === targetId);
+      const target = targetMatches[currentTarget.kind === "control" ? currentTarget.occurrence ?? 0 : 0];
+      target?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    });
+  };
 
   if (!tutorial || !progress || activeTabId !== tabId || !level) return null;
 
@@ -112,6 +154,8 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
       setLevel(activeProblemId!, nextLevel.id);
       setFeedback(null);
       setHintContext(null);
+      setDetailedHintContext(null);
+      setHighlightTarget(null);
     }
   };
 
@@ -120,6 +164,8 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
     resetProgress(activeProblemId!);
     setFeedback(null);
     setHintContext(null);
+    setDetailedHintContext(null);
+    setHighlightTarget(null);
   };
 
   const completedInLevel = level.steps.filter((step) => completedIds.includes(step.id)).length;
@@ -141,7 +187,7 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
         <button type="button" onClick={() => setResetConfirmOpen(true)} className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200" aria-label="Restart tutorial from blank canvas" title="Restart from blank canvas">
           <RotateCcw className="h-3.5 w-3.5" />
         </button>
-        <button type="button" onClick={hideTutorial} className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200" aria-label="Hide tutorial coach" title="Hide tutorial">
+        <button type="button" onClick={() => { setHighlightTarget(null); hideTutorial(); }} className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200" aria-label="Hide tutorial coach" title="Hide tutorial">
           <X className="h-3.5 w-3.5" />
         </button>
       </header>
@@ -157,7 +203,7 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
                 key={item.id}
                 type="button"
                 disabled={!isUnlocked}
-                onClick={() => { setLevel(activeProblemId!, item.id); setFeedback(null); setHintContext(null); }}
+                onClick={() => { setLevel(activeProblemId!, item.id); setFeedback(null); setHintContext(null); setDetailedHintContext(null); setHighlightTarget(null); }}
                 className={`rounded-md border px-2 py-1 text-[10px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isSelected ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-200" : done ? "border-emerald-500/30 text-emerald-300" : "border-zinc-800 text-zinc-400 hover:bg-zinc-900"}`}
                 aria-current={isSelected ? "step" : undefined}
                 title={item.trafficLabel}
@@ -190,11 +236,52 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
                 <p className="mt-2 text-[11px] leading-relaxed text-zinc-400"><span className="font-semibold text-cyan-300">Why:</span> {currentStep.why}</p>
                 <p className="mt-1 text-[11px] leading-relaxed text-zinc-500"><span className="font-semibold text-zinc-400">Trade-off:</span> {currentStep.tradeoff}</p>
                 {currentStep.hint && (
-                  <button type="button" onClick={() => setHintContext((value) => value === currentObjectiveKey ? null : currentObjectiveKey)} className="mt-2 inline-flex min-h-7 items-center gap-1 rounded px-1.5 text-[10px] text-amber-300 hover:bg-amber-500/10">
-                    <Lightbulb className="h-3 w-3" /> {hintContext === currentObjectiveKey ? "Hide hint" : "Need a hint?"}
-                  </button>
+                  <>
+                    <button type="button" onClick={() => setHintContext((value) => value === currentObjectiveKey ? null : currentObjectiveKey)} className="mt-2 inline-flex min-h-7 items-center gap-1 rounded px-1.5 text-[10px] text-amber-300 hover:bg-amber-500/10">
+                      <Lightbulb className="h-3 w-3" /> {hintContext === currentObjectiveKey ? "Hide hint" : "Need a hint?"}
+                    </button>
+                    {hintContext === currentObjectiveKey && <p className="mt-1 rounded bg-amber-500/5 p-2 text-[10px] text-amber-100">{currentStep.hint}</p>}
+                  </>
                 )}
-                {hintContext === currentObjectiveKey && currentStep.hint && <p className="mt-1 rounded bg-amber-500/5 p-2 text-[10px] text-amber-100">{currentStep.hint}</p>}
+                <button
+                  type="button"
+                  aria-expanded={detailedHintContext === currentObjectiveKey}
+                  onClick={() => {
+                    const opening = detailedHintContext !== currentObjectiveKey;
+                    setDetailedHintContext(opening ? currentObjectiveKey : null);
+                    if (opening) {
+                      setActiveGuidanceIndex(0);
+                      const firstTarget = guidance[0]?.target;
+                      if (firstTarget) focusGuidanceTarget(0);
+                    } else {
+                      setHighlightTarget(null);
+                    }
+                  }}
+                  className="mt-2 inline-flex min-h-8 items-center gap-1.5 rounded-md border border-cyan-500/30 bg-cyan-500/5 px-2.5 text-[10px] font-semibold text-cyan-200 hover:bg-cyan-500/10"
+                >
+                  <Lightbulb className="h-3 w-3" />
+                  {detailedHintContext === currentObjectiveKey ? "Hide detailed steps" : "Show detailed step-by-step hint"}
+                </button>
+                {detailedHintContext === currentObjectiveKey && (
+                  <ol className="mt-2 space-y-2 rounded-md border border-zinc-800 bg-zinc-950/60 p-2.5">
+                    {guidance.map((item, index) => (
+                      <li key={`${index}-${item.instruction}`} className="flex items-start gap-2">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-[10px] font-semibold text-zinc-300">{index + 1}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[10px] leading-relaxed text-zinc-200">{item.instruction}</p>
+                          {item.value && <p className="mt-1 font-mono text-[10px] text-amber-200">Enter/select: {item.value}</p>}
+                          {item.target && (
+                            <button
+                              type="button"
+                              onClick={() => focusGuidanceTarget(index)}
+                              className={`mt-1.5 rounded px-2 py-1 text-[10px] font-medium ${activeGuidanceIndex === index ? "bg-amber-400/15 text-amber-200" : "text-cyan-300 hover:bg-cyan-500/10"}`}
+                            >{activeGuidanceIndex === index ? "Highlighted on screen" : "Show me where"}</button>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
               </div>
             </div>
           </div>
@@ -214,7 +301,7 @@ export function TutorialCoach({ onRunScenario, onResetCanvas }: TutorialCoachPro
           <span className="text-[10px] text-zinc-500">Check your work after adding/configuring the requested items.</span>
           {currentStep?.objective.kind === "simulation-checkpoint" ? (
             <div className="flex items-center gap-2">
-              <button type="button" onClick={runScenario} className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-cyan-600 px-2.5 text-[11px] font-semibold text-white hover:bg-cyan-500">
+              <button type="button" data-tutorial-target="control:tutorial-run" data-tutorial-highlight={activeGuidanceIndex === 0 && guidance[0]?.target?.kind === "control" && guidance[0].target.id === "tutorial-run" ? "true" : undefined} onClick={runScenario} className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-cyan-600 px-2.5 text-[11px] font-semibold text-white hover:bg-cyan-500">
                 <Play className="h-3 w-3" /> Run {level.requestsPerSec.toLocaleString()} req/s
               </button>
               <button type="button" onClick={checkCurrentStep} className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 text-[11px] font-semibold text-zinc-200 hover:bg-zinc-800">

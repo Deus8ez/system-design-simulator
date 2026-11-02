@@ -12,11 +12,18 @@ function asDataUrl(source, fileName) {
 }
 
 const readSource = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-const [tutorialsSource, tracksSource, problemCatalogSource, componentCatalogSource] = await Promise.all([
+const [tutorialsSource, tracksSource, problemCatalogSource, componentCatalogSource, runtimeEditorSource, rightPanelSource, simulationControlsSource, tutorialCoachSource, paletteSource, componentNodeSource, animatedEdgeSource] = await Promise.all([
   readSource("src/data/tutorials.ts"),
   readSource("src/data/tutorialTracks.ts"),
   readSource("src/data/problems.ts"),
   readSource("src/data/components.ts"),
+  readSource("src/components/panel/RuntimeModelEditor.tsx"),
+  readSource("src/components/panel/RightPanel.tsx"),
+  readSource("src/components/panel/SimulationControls.tsx"),
+  readSource("src/components/tutorial/TutorialCoach.tsx"),
+  readSource("src/components/sidebar/ComponentPalette.tsx"),
+  readSource("src/components/canvas/nodes/ComponentNode.tsx"),
+  readSource("src/components/canvas/edges/AnimatedEdge.tsx"),
 ]);
 const customProblemStoreUrl = asDataUrl(
   "export const useCustomProblemsStore = { getState: () => ({}) };",
@@ -41,6 +48,8 @@ const [{ SYSTEM_TUTORIALS, TUTORIAL_BY_PROBLEM_ID }, evaluator] = await Promise.
   import(asDataUrl(resolvedTutorialsSource, "tutorials.ts")),
   readSource("src/lib/tutorialEvaluator.ts").then((source) => import(asDataUrl(source, "tutorialEvaluator.ts"))),
 ]);
+const guidanceSource = await readSource("src/lib/tutorialGuidance.ts");
+const { getTutorialGuidance } = await import(asDataUrl(guidanceSource, "tutorialGuidance.ts"));
 const { PROBLEMS } = await import(problemCatalogUrl);
 const { MAX_SIMULATION_QPS, MIN_SIMULATION_QPS } = await import(engineConstantsUrl);
 const { evaluateTutorialObjective, getTutorialDesignSignature } = evaluator;
@@ -256,6 +265,52 @@ test("every authored tutorial objective has a satisfiable positive example", () 
         const context = makePassingObjectiveContext(step.objective);
         const result = evaluateTutorialObjective(step.objective, context);
         assert.equal(result.complete, true, `${tutorial.problemId}/${level.id}/${step.id}: ${result.feedback}`);
+      }
+    }
+  }
+});
+
+test("every tutorial step has detailed, actionable guidance with valid semantic targets", () => {
+  const validControls = new Set([
+    "endpoint-add", "endpoint-path", "endpoint-pipeline", "gateway-routes", "gateway-route-add", "database-schema", "cache-ttl",
+    "queue-topic-add", "queue-topic-name", "queue-subscription-add", "queue-delivery-mode",
+    "rate-limit-policy", "simulation-tab", "tutorial-run", "edge-communication", "replicas",
+  ]);
+  const targetSources = [runtimeEditorSource, rightPanelSource, simulationControlsSource, tutorialCoachSource];
+  const declaredControlIds = targetSources.flatMap((source) =>
+    [...source.matchAll(/data-tutorial-target="control:([^"$]+)"/g)].map(([, id]) => id),
+  );
+  const declaredControlPatterns = targetSources.flatMap((source) =>
+    [...source.matchAll(/data-tutorial-target=\{`control:([^$`]+)\$\{([^}]+)\}([^`]*)`\}/g)]
+      .map(([, prefix]) => prefix),
+  );
+  const helperTargets = new Set([
+    ...[...runtimeEditorSource.matchAll(/controlTarget\("([^"]+)"\)/g)].map(([, id]) => id),
+  ]);
+  for (const tutorial of SYSTEM_TUTORIALS) {
+    for (const level of tutorial.levels) {
+      for (const step of level.steps) {
+        const instructions = getTutorialGuidance(step);
+        assert.ok(instructions.length > 0, `${tutorial.problemId}/${level.id}/${step.id} needs detailed guidance`);
+        for (const instruction of instructions) {
+          assert.ok(instruction.instruction.length > 20, `${step.id} guidance must explain a concrete action`);
+          if (!instruction.target) continue;
+          if (instruction.target.kind === "control") {
+            const targetId = instruction.target.id;
+            const isDeclared = declaredControlIds.includes(targetId) || helperTargets.has(targetId) ||
+              declaredControlPatterns.some((prefix) => targetId.startsWith(prefix));
+            assert.ok(validControls.has(targetId) || isDeclared, `${step.id} has unknown control target ${targetId}`);
+            assert.ok(isDeclared, `${step.id} target ${targetId} is not declared by a rendered UI control`);
+          } else if (instruction.target.kind === "edge") {
+            assert.ok(builtInComponentIds.has(instruction.target.sourceComponentId), `${step.id} has unknown edge source component`);
+            assert.ok(builtInComponentIds.has(instruction.target.targetComponentId), `${step.id} has unknown edge target component`);
+            assert.match(animatedEdgeSource, /data-tutorial-target=\{`edge:/, `${step.id} edge target has no rendered DOM declaration`);
+          } else {
+            assert.ok(builtInComponentIds.has(instruction.target.componentId), `${step.id} has unknown component target ${instruction.target.componentId}`);
+            if (instruction.target.kind === "palette") assert.match(paletteSource, /data-tutorial-target=\{`palette:/);
+            if (instruction.target.kind === "node") assert.match(componentNodeSource, /data-tutorial-target=\{tutorialTargetId\}/);
+          }
+        }
       }
     }
   }

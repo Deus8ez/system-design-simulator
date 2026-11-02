@@ -88,7 +88,17 @@ export interface TutorialStep {
   why: string;
   tradeoff: string;
   hint?: string;
+  detailedSteps?: TutorialGuidanceStep[];
   objective: TutorialObjective;
+}
+
+export interface TutorialGuidanceStep {
+  instruction: string;
+  target?:
+    | { kind: "palette" | "node"; componentId: string }
+    | { kind: "control"; id: string; componentId?: string; occurrence?: number; componentInstance?: number }
+    | { kind: "edge"; sourceComponentId: string; targetComponentId: string };
+  value?: string;
 }
 
 export interface TutorialLevel {

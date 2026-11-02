@@ -55,6 +55,7 @@ export interface CanvasTab {
   label: string;
   nodes: Node[];
   edges: Edge[];
+  requestsPerSec?: number;
   readOnly?: boolean;
   /** True when a read-only reference is illustrative but fails design compilation. */
   designOnly?: boolean;

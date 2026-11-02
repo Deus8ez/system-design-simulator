@@ -21,6 +21,7 @@ import { useAppStore } from "@/store/appStore";
 import { useCustomComponentsStore } from "@/store/customComponentsStore";
 import { useIsCoarsePointer } from "@/hooks/useBreakpoint";
 import type { SystemComponent } from "@/types/component";
+import { useTutorialStore } from "@/store/tutorialStore";
 
 const CATEGORY_ACCENT: Record<string, string> = {
   networking: "text-blue-400",
@@ -52,6 +53,7 @@ export function ComponentPalette({ onCreateCustomComponent, onComponentAdded }: 
   const customComponents = useCustomComponentsStore((s) => s.components);
   const deleteCustomComponent = useCustomComponentsStore((s) => s.deleteComponent);
   const isCoarse = useIsCoarsePointer();
+  const tutorialHighlight = useTutorialStore((state) => state.highlightTarget);
 
   const allComponents: SystemComponent[] = [...customComponents, ...SYSTEM_COMPONENTS];
   const customIds = new Set(customComponents.map((c) => c.id));
@@ -210,6 +212,8 @@ export function ComponentPalette({ onCreateCustomComponent, onComponentAdded }: 
                         render={
                           <div
                             draggable
+                            data-tutorial-target={`palette:${item.id}`}
+                            data-tutorial-highlight={tutorialHighlight?.kind === "palette" && tutorialHighlight.componentId === item.id ? "true" : undefined}
                             onDragStart={(e) => handleDragStart(e, item.id)}
                             // Touch devices can't drag-and-drop: tapping the row adds the component
                             onClick={isCoarse ? () => handleQuickAdd(item.id) : undefined}

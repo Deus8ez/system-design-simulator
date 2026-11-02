@@ -9,6 +9,7 @@ import { useAppStore } from "@/store/appStore";
 interface SidebarProps {
   open?: boolean;
   onStartTutorial?: (problemId: string) => void;
+  onShowCompleteDesign?: (problemId: string) => void;
   onCreateProblem?: () => void;
   onCreateCustomComponent?: () => void;
   /** Called after a component is added from the palette (closes the mobile drawer). */
@@ -18,12 +19,14 @@ interface SidebarProps {
 
 function SidebarTabs({
   onStartTutorial,
+  onShowCompleteDesign,
   onCreateProblem,
   onCreateCustomComponent,
   onComponentAdded,
 }: {
   onCreateProblem?: () => void;
   onStartTutorial?: (problemId: string) => void;
+  onShowCompleteDesign?: (problemId: string) => void;
   onCreateCustomComponent?: () => void;
   onComponentAdded?: () => void;
 }) {
@@ -64,7 +67,7 @@ function SidebarTabs({
       </TabsContent>
 
       <TabsContent value="learn" className="mt-0 flex-1 min-h-0 overflow-hidden">
-        <LearningPath onStartTutorial={onStartTutorial} />
+        <LearningPath onStartTutorial={onStartTutorial} onShowCompleteDesign={onShowCompleteDesign} />
       </TabsContent>
     </Tabs>
   );
@@ -73,6 +76,7 @@ function SidebarTabs({
 export function Sidebar({
   open = true,
   onStartTutorial,
+  onShowCompleteDesign,
   onCreateProblem,
   onCreateCustomComponent,
   onComponentAdded,
@@ -83,6 +87,7 @@ export function Sidebar({
       <div className="flex h-full w-full flex-col bg-zinc-900">
         <SidebarTabs
           onStartTutorial={onStartTutorial}
+          onShowCompleteDesign={onShowCompleteDesign}
           onCreateProblem={onCreateProblem}
           onCreateCustomComponent={onCreateCustomComponent}
           onComponentAdded={onComponentAdded}
@@ -102,6 +107,7 @@ export function Sidebar({
       <div className="flex w-[280px] flex-1 flex-col min-h-0">
         <SidebarTabs
           onStartTutorial={onStartTutorial}
+          onShowCompleteDesign={onShowCompleteDesign}
           onCreateProblem={onCreateProblem}
           onCreateCustomComponent={onCreateCustomComponent}
         />

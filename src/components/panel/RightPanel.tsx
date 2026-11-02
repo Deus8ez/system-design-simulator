@@ -21,6 +21,7 @@ import { useInterviewStore } from "@/store/interviewStore";
 import { InterviewPhasePanel } from "@/components/interview/InterviewPhasePanel";
 import { RuntimeModelEditor } from "./RuntimeModelEditor";
 import { ValidationPanel } from "./ValidationPanel";
+import { useTutorialStore } from "@/store/tutorialStore";
 
 interface RightPanelProps {
   open?: boolean;
@@ -124,11 +125,12 @@ export function RightPanel({ open = true, onSimulate, variant = "desktop" }: Rig
   );
 }
 
-function EdgePropertiesPanel() {
+function EdgePropertiesPanel({ readOnly }: { readOnly: boolean }) {
   const selectedEdgeId = useCanvasStore((s) => s.selectedEdgeId);
   const edges = useCanvasStore((s) => s.edges);
   const updateEdgeData = useCanvasStore((s) => s.updateEdgeData);
   const deleteEdge = useCanvasStore((s) => s.deleteEdge);
+  const tutorialHighlight = useTutorialStore((s) => s.highlightTarget);
 
   const selectedEdge = edges.find((e) => e.id === selectedEdgeId);
   if (!selectedEdge) return null;
@@ -142,12 +144,17 @@ function EdgePropertiesPanel() {
         Edge Properties
       </p>
 
-      <div className="space-y-2">
+      <div
+        data-tutorial-target="control:edge-communication"
+        data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === "edge-communication" ? "true" : undefined}
+        className="space-y-2"
+      >
         {/* Label */}
         <div>
           <label className="mb-1 block text-xs text-zinc-400">Label</label>
           <input
             type="text"
+            disabled={readOnly}
             value={data.label ?? ""}
             onChange={(e) => updateEdgeData(selectedEdge.id, { label: e.target.value })}
             placeholder="e.g. /api/users"
@@ -159,6 +166,7 @@ function EdgePropertiesPanel() {
         <div>
           <label className="mb-1 block text-xs text-zinc-400">Protocol</label>
           <select
+            disabled={readOnly}
             value={data.protocol ?? "http"}
             onChange={(e) => updateEdgeData(selectedEdge.id, { protocol: e.target.value as CustomEdgeData["protocol"] })}
             className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-cyan-600 focus:ring-1 focus:ring-cyan-600/50"
@@ -176,6 +184,7 @@ function EdgePropertiesPanel() {
           <label className="mb-1 block text-xs text-zinc-400">Communication</label>
           <div className="flex gap-1">
             <button
+              disabled={readOnly}
               onClick={() => updateEdgeData(selectedEdge.id, { async: false })}
               className={`flex-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
                 !data.async
@@ -186,6 +195,7 @@ function EdgePropertiesPanel() {
               Sync
             </button>
             <button
+              disabled={readOnly}
               onClick={() => updateEdgeData(selectedEdge.id, { async: true })}
               className={`flex-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
                 data.async
@@ -205,6 +215,7 @@ function EdgePropertiesPanel() {
         <Button
           variant="outline"
           size="sm"
+          disabled={readOnly}
           onClick={() => deleteEdge(selectedEdge.id)}
           className="w-full gap-1.5 border-zinc-700 text-rose-400 hover:bg-zinc-800 hover:text-rose-300"
         >
@@ -225,6 +236,7 @@ function PropertiesTab() {
   const updateNodeData = useCanvasStore((s) => s.updateNodeData);
   const deleteNode = useCanvasStore((s) => s.deleteNode);
   const selectedProblemId = useAppStore((s) => s.selectedProblemId);
+  const tutorialHighlight = useTutorialStore((s) => s.highlightTarget);
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) as
     | (typeof nodes[number] & { data: ComponentNodeData })
@@ -296,6 +308,7 @@ function PropertiesTab() {
             <Button
               variant="outline"
               size="sm"
+              disabled={readOnly}
               onClick={() =>
                 window.dispatchEvent(
                   new CustomEvent("textnode:edit", { detail: { id: selectedNode.id } })
@@ -309,6 +322,7 @@ function PropertiesTab() {
             <Button
               variant="outline"
               size="sm"
+              disabled={readOnly}
               onClick={() => deleteNode(selectedNode.id)}
               className="w-full gap-1.5 border-zinc-700 text-rose-400 hover:bg-zinc-800 hover:text-rose-300"
             >
@@ -346,6 +360,9 @@ function PropertiesTab() {
               </div>
               <Slider
                 aria-label="Replicas"
+                data-tutorial-target="control:replicas"
+                data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === "replicas" && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
+                disabled={readOnly}
                 value={[data.replicas as number]}
                 onValueChange={(v) =>
                   updateNodeData(selectedNode.id, { replicas: Array.isArray(v) ? v[0] : v })
@@ -381,6 +398,7 @@ function PropertiesTab() {
             <Button
               variant="outline"
               size="sm"
+              disabled={readOnly}
               onClick={() => deleteNode(selectedNode.id)}
               className="w-full gap-1.5 border-zinc-700 text-rose-400 hover:bg-zinc-800 hover:text-rose-300"
             >
@@ -395,7 +413,7 @@ function PropertiesTab() {
           );
         })()
       ) : selectedEdgeId ? (
-        <EdgePropertiesPanel />
+        <EdgePropertiesPanel readOnly={readOnly} />
       ) : (
         <div className="flex flex-col items-center gap-3 py-6 text-center">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-800">

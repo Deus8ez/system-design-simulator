@@ -9,13 +9,20 @@ export interface TutorialProgress {
   lastSimulation?: TutorialSimulationProof;
 }
 
+export type TutorialHighlightTarget =
+  | { kind: "palette" | "node"; componentId: string }
+  | { kind: "control"; id: string; componentId?: string; occurrence?: number; componentInstance?: number }
+  | { kind: "edge"; sourceComponentId: string; targetComponentId: string };
+
 interface TutorialState {
   activeProblemId: string | null;
   isHidden: boolean;
+  highlightTarget: TutorialHighlightTarget | null;
   progressByProblem: Record<string, TutorialProgress>;
   start: (problemId: string) => void;
   show: () => void;
   hide: () => void;
+  setHighlightTarget: (target: TutorialHighlightTarget | null) => void;
   setLevel: (problemId: string, level: TutorialLevelId) => void;
   completeStep: (problemId: string, stepId: string) => void;
   recordSimulation: (problemId: string, proof: TutorialSimulationProof) => void;
@@ -32,6 +39,7 @@ export const useTutorialStore = create<TutorialState>()(
     (set) => ({
       activeProblemId: null,
       isHidden: false,
+      highlightTarget: null,
       progressByProblem: {},
       start: (problemId) =>
         set((state) => ({
@@ -44,6 +52,7 @@ export const useTutorialStore = create<TutorialState>()(
         })),
       show: () => set({ isHidden: false }),
       hide: () => set({ isHidden: true }),
+      setHighlightTarget: (highlightTarget) => set({ highlightTarget }),
       setLevel: (problemId, level) =>
         set((state) => ({
           progressByProblem: {

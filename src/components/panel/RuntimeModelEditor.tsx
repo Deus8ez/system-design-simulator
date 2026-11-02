@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { useCanvasStore, type ComponentNodeData } from "@/store/canvasStore";
+import { useTutorialStore } from "@/store/tutorialStore";
 import type {
   CacheConfiguration,
   DatabaseColumn,
@@ -156,6 +157,7 @@ export function RuntimeModelEditor({
   disabled?: boolean;
 }) {
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
+  const tutorialHighlight = useTutorialStore((state) => state.highlightTarget);
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
   const endpoints = (data.endpoints ?? []) as EndpointDefinition[];
@@ -172,6 +174,12 @@ export function RuntimeModelEditor({
   const subscriptions = Array.isArray(queueConfig.subscriptions) ? queueConfig.subscriptions : [];
   const saveQueueConfig = (next: QueueConfiguration) => updateNodeData(nodeId, { queueConfig: next });
   const saveTables = (next: DatabaseTable[]) => updateNodeData(nodeId, { tables: next });
+  const controlTarget = (id: string) => ({
+    "data-tutorial-target": `control:${id}`,
+    "data-tutorial-highlight": tutorialHighlight?.kind === "control" && tutorialHighlight.id === id && tutorialHighlight.componentId === data.componentId ? "true" : undefined,
+  });
+  const controlHighlight = (id: string) =>
+    tutorialHighlight?.kind === "control" && tutorialHighlight.id === id && tutorialHighlight.componentId === data.componentId ? "true" : undefined;
 
   if (data.componentId === "rate-limiter") {
     const config = data.rateLimiterConfig as RateLimiterConfiguration | undefined;
@@ -186,7 +194,7 @@ export function RuntimeModelEditor({
     });
 
     return (
-      <section className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
+      <section {...controlTarget("rate-limit-policy")} className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
         <div>
           <h3 className="text-xs font-semibold text-zinc-200">Rate limit policy</h3>
           <p className="mt-0.5 text-[11px] text-zinc-500">Configure a sustained request quota and the key used to group traffic.</p>
@@ -308,13 +316,15 @@ export function RuntimeModelEditor({
     });
 
     return (
-      <section className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
+      <section {...controlTarget("gateway-routes")} className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
         <div className="flex items-center justify-between gap-2">
           <div>
             <h3 className="text-xs font-semibold text-zinc-200">Gateway routes</h3>
             <p className="mt-0.5 text-[11px] text-zinc-500">Exact method + path mapping to a connected App Server endpoint.</p>
           </div>
           <button
+            data-tutorial-target="control:gateway-route-add"
+            data-tutorial-highlight={controlHighlight("gateway-route-add")}
             type="button"
             disabled={disabled}
             onClick={() => saveRoutes([...routes, { id: id("gateway-route"), method: "GET", path: "/new" }])}
@@ -330,6 +340,8 @@ export function RuntimeModelEditor({
           <div key={route.id} className="space-y-2 rounded-md border border-zinc-700/80 bg-zinc-800/50 p-2">
             <div className="flex gap-1.5">
               <select
+                data-tutorial-target={`control:gateway-route-method-${routeIndex}`}
+                data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `gateway-route-method-${routeIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
                 aria-label={`Gateway route ${routeIndex + 1} method`}
                 disabled={disabled}
                 value={route.method}
@@ -341,6 +353,8 @@ export function RuntimeModelEditor({
                 {METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
               </select>
               <input
+                data-tutorial-target={`control:gateway-route-path-${routeIndex}`}
+                data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `gateway-route-path-${routeIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
                 aria-label={`Gateway route ${routeIndex + 1} path`}
                 disabled={disabled}
                 value={route.path}
@@ -359,6 +373,8 @@ export function RuntimeModelEditor({
               ><Trash2 className="h-3.5 w-3.5" /></button>
             </div>
             <select
+                data-tutorial-target={`control:gateway-route-backend-${routeIndex}`}
+                data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `gateway-route-backend-${routeIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
               aria-label={`Gateway route ${routeIndex + 1} backend`}
               disabled={disabled || backends.length === 0}
               value={route.backendNodeId ?? ""}
@@ -397,13 +413,15 @@ export function RuntimeModelEditor({
 
   if (data.componentId === "app-server") {
     return (
-      <section className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
+      <section {...controlTarget("endpoint-pipeline")} className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
         <div className="flex items-center justify-between gap-2">
           <div>
             <h3 className="text-xs font-semibold text-zinc-200">Service endpoints</h3>
             <p className="mt-0.5 text-[11px] text-zinc-500">Build an ordered request pipeline with weighted routes and retry policies.</p>
           </div>
           <button
+            data-tutorial-target="control:endpoint-add"
+            data-tutorial-highlight={controlHighlight("endpoint-add")}
             type="button"
             disabled={disabled}
             onClick={() => saveEndpoints([...endpoints, { id: id("endpoint"), method: "GET", path: "/new", steps: [] }])}
@@ -419,6 +437,8 @@ export function RuntimeModelEditor({
           <div key={endpoint.id} className="space-y-2 rounded-md border border-zinc-700/80 bg-zinc-800/50 p-2">
             <div className="flex gap-1.5">
               <select
+                data-tutorial-target={`control:endpoint-method-${endpointIndex}`}
+                data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `endpoint-method-${endpointIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
                 aria-label={`Endpoint ${endpointIndex + 1} method`}
                 disabled={disabled}
                 value={endpoint.method}
@@ -428,6 +448,8 @@ export function RuntimeModelEditor({
                 {METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
               </select>
               <input
+                data-tutorial-target={`control:endpoint-path-${endpointIndex}`}
+                data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `endpoint-path-${endpointIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
                 aria-label={`Endpoint ${endpointIndex + 1} path`}
                 disabled={disabled}
                 value={endpoint.path}
@@ -483,6 +505,8 @@ export function RuntimeModelEditor({
                   <span className="absolute -left-[4px] top-2 h-1.5 w-1.5 rounded-full bg-cyan-500" />
                   <div className="flex gap-1.5">
                     <select
+                      data-tutorial-target={`control:endpoint-step-kind-${endpointIndex}-${stepIndex}`}
+                      data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `endpoint-step-kind-${endpointIndex}-${stepIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
                       aria-label={`Pipeline step ${stepIndex + 1}`}
                       disabled={disabled}
                       value={step.kind}
@@ -498,6 +522,8 @@ export function RuntimeModelEditor({
                       {LOGIC_STEPS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                     </select>
                     <button
+                      data-tutorial-target={`control:endpoint-step-up-${endpointIndex}-${stepIndex}`}
+                      data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `endpoint-step-up-${endpointIndex}-${stepIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
                       type="button"
                       disabled={disabled || stepIndex === 0}
                       aria-label="Move step up"
@@ -533,6 +559,8 @@ export function RuntimeModelEditor({
                   {TARGET_REQUIRED.has(step.kind) && (
                     <>
                       <input
+                        data-tutorial-target={`control:endpoint-step-resource-${endpointIndex}-${stepIndex}`}
+                        data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `endpoint-step-resource-${endpointIndex}-${stepIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
                         aria-label={`${step.kind} resource`}
                         disabled={disabled}
                         value={step.target ?? ""}
@@ -544,6 +572,8 @@ export function RuntimeModelEditor({
                         className={`${inputClass(disabled)} mt-1 w-full`}
                       />
                       <select
+                        data-tutorial-target={`control:endpoint-step-target-${endpointIndex}-${stepIndex}`}
+                        data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `endpoint-step-target-${endpointIndex}-${stepIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
                         aria-label={`${step.kind} downstream component`}
                         disabled={disabled || downstreamTargets.length === 0}
                         value={step.targetNodeId ?? ""}
@@ -575,6 +605,8 @@ export function RuntimeModelEditor({
                       Cache hit rate
                       <span className="flex items-center gap-1">
                         <input
+                          data-tutorial-target={`control:endpoint-cache-hit-rate-${endpointIndex}-${stepIndex}`}
+                          data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `endpoint-cache-hit-rate-${endpointIndex}-${stepIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
                           aria-label="Cache hit rate percent"
                           type="number"
                           min="0"
@@ -679,6 +711,8 @@ export function RuntimeModelEditor({
             </div>
 
             <button
+              data-tutorial-target={`control:endpoint-step-add-${endpointIndex}`}
+              data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `endpoint-step-add-${endpointIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
               type="button"
               disabled={disabled}
               onClick={() => saveEndpoints(updateEndpoint(endpoints, endpoint.id, (current) => ({
@@ -698,7 +732,7 @@ export function RuntimeModelEditor({
     const isTimeSeriesDatabase = data.componentId === "timeseries-db";
     const usesTables = isSqlDatabase || isTimeSeriesDatabase;
     return (
-      <section className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
+      <section {...controlTarget("database-schema")} className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
         <div className="flex items-center justify-between gap-2">
           <div>
             <h3 className="text-xs font-semibold text-zinc-200">
@@ -713,6 +747,8 @@ export function RuntimeModelEditor({
             </p>
           </div>
           <button
+            data-tutorial-target="control:database-table-add"
+            data-tutorial-highlight={controlHighlight("database-table-add")}
             type="button"
             disabled={disabled}
             onClick={() => saveTables([...tables, {
@@ -738,6 +774,8 @@ export function RuntimeModelEditor({
           <div key={table.id} className="space-y-2 rounded-md border border-zinc-700/80 bg-zinc-800/50 p-2">
             <div className="flex gap-1.5">
               <input
+                data-tutorial-target={`control:database-table-name-${tableIndex}`}
+                data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `database-table-name-${tableIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
                 aria-label={`Table ${tableIndex + 1} name`}
                 disabled={disabled}
                 value={table.name}
@@ -775,6 +813,8 @@ export function RuntimeModelEditor({
                 <ColumnEditor
                   key={column.id}
                   column={column}
+                  tutorialOccurrence={columnIndex}
+                  tutorialComponentId={data.componentId}
                   disabled={disabled}
                   onChange={(next) => updateTableColumn(tables, table, column.id, next, saveTables)}
                   onDelete={() => saveTables(tables.map((item) => item.id === table.id ? {
@@ -790,6 +830,8 @@ export function RuntimeModelEditor({
             </div>
 
             <button
+              data-tutorial-target={`control:database-column-add-${tableIndex}`}
+              data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `database-column-add-${tableIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
               type="button"
               disabled={disabled}
               onClick={() => saveTables(tables.map((item) => item.id === table.id ? {
@@ -803,6 +845,8 @@ export function RuntimeModelEditor({
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-medium text-zinc-400">Indexes</span>
                 <button
+                  data-tutorial-target={`control:database-index-add-${tableIndex}`}
+                  data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `database-index-add-${tableIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
                   type="button"
                   disabled={disabled || table.columns.length === 0}
                   onClick={() => {
@@ -825,6 +869,7 @@ export function RuntimeModelEditor({
                   index={index}
                   indexNumber={indexNumber}
                   columns={table.columns}
+                  tutorialComponentId={data.componentId}
                   disabled={disabled}
                   onChange={(next) => saveTables(tables.map((item) => item.id === table.id ? {
                     ...item,
@@ -882,6 +927,8 @@ export function RuntimeModelEditor({
         <label className="block space-y-1 text-[11px] text-zinc-400">
           Default TTL (seconds; 0 means no expiration)
           <input
+            data-tutorial-target="control:cache-ttl"
+            data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === "cache-ttl" && tutorialHighlight.componentId === data.componentId ? "true" : undefined}
             aria-label="Redis default TTL in seconds"
             type="number"
             min="0"
@@ -928,12 +975,14 @@ export function RuntimeModelEditor({
   if (data.componentId === "message-queue") {
     const deliveryMode = data.queueDeliveryMode === "competing" ? "competing" : "broadcast";
     return (
-      <section className="space-y-2 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
+      <section {...controlTarget("queue-topic-add")} className="space-y-2 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
         <div>
           <h3 className="text-xs font-semibold text-zinc-200">Queue delivery</h3>
           <p className="mt-0.5 text-[11px] text-zinc-500">Choose how connected consumers receive messages.</p>
         </div>
         <select
+          data-tutorial-target="control:queue-delivery-mode"
+          data-tutorial-highlight={controlHighlight("queue-delivery-mode")}
           aria-label="Queue consumer delivery mode"
           disabled={disabled}
           value={deliveryMode}
@@ -955,6 +1004,8 @@ export function RuntimeModelEditor({
               <p className="text-[10px] text-zinc-500">Publish steps are checked against configured topic names.</p>
             </div>
             <button
+              data-tutorial-target="control:queue-topic-add"
+              data-tutorial-highlight={controlHighlight("queue-topic-add")}
               type="button"
               disabled={disabled}
               onClick={() => saveQueueConfig({
@@ -967,6 +1018,8 @@ export function RuntimeModelEditor({
           {queueConfig.topics.map((topic: QueueTopicDefinition, topicIndex) => (
             <div key={topic.id} className="grid grid-cols-[minmax(0,1fr)_88px_auto] items-center gap-1.5">
               <input
+                data-tutorial-target="control:queue-topic-name"
+                data-tutorial-highlight={controlHighlight("queue-topic-name")}
                 aria-label={`Queue topic ${topicIndex + 1} name`}
                 disabled={disabled}
                 value={topic.name}
@@ -1015,6 +1068,8 @@ export function RuntimeModelEditor({
               <p className="text-[10px] text-zinc-500">Map connected consumers to the topics they process.</p>
             </div>
             <button
+              data-tutorial-target="control:queue-subscription-add"
+              data-tutorial-highlight={controlHighlight("queue-subscription-add")}
               type="button"
               disabled={disabled}
               onClick={() => saveQueueConfig({
@@ -1150,20 +1205,27 @@ function updateTableColumn(
 
 function ColumnEditor({
   column,
+  tutorialOccurrence,
+  tutorialComponentId,
   disabled,
   onChange,
   onDelete,
   label,
 }: {
   column: DatabaseColumn;
+  tutorialOccurrence: number;
+  tutorialComponentId: string;
   disabled: boolean;
   onChange: (column: DatabaseColumn) => void;
   onDelete: () => void;
   label: string;
 }) {
+  const tutorialHighlight = useTutorialStore((state) => state.highlightTarget);
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_auto_auto] items-center gap-1">
       <input
+        data-tutorial-target="control:database-column-name"
+        data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === "database-column-name" && tutorialHighlight.componentId === tutorialComponentId && tutorialHighlight.occurrence === tutorialOccurrence ? "true" : undefined}
         aria-label={`${label} name`}
         disabled={disabled}
         value={column.name}
@@ -1194,6 +1256,7 @@ function IndexEditor({
   index,
   indexNumber,
   columns,
+  tutorialComponentId,
   disabled,
   onChange,
   onDelete,
@@ -1201,10 +1264,12 @@ function IndexEditor({
   index: DatabaseIndex;
   indexNumber: number;
   columns: DatabaseColumn[];
+  tutorialComponentId: string;
   disabled: boolean;
   onChange: (index: DatabaseIndex) => void;
   onDelete: () => void;
 }) {
+  const tutorialHighlight = useTutorialStore((state) => state.highlightTarget);
   const availableColumns = new Set(columns.map((column) => column.name));
   const [columnsDraft, setColumnsDraft] = useState(index.columns.join(", "));
 
@@ -1227,6 +1292,8 @@ function IndexEditor({
         <button type="button" disabled={disabled} onClick={onDelete} aria-label="Remove index" className="rounded p-1 text-zinc-500 hover:text-rose-400 disabled:opacity-50"><Trash2 className="h-3 w-3" /></button>
       </div>
       <input
+        data-tutorial-target="control:database-index-columns"
+        data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === "database-index-columns" && tutorialHighlight.componentId === tutorialComponentId ? "true" : undefined}
         aria-label={`Index ${indexNumber + 1} columns`}
         disabled={disabled}
         value={columnsDraft}

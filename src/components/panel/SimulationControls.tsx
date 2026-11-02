@@ -9,6 +9,7 @@ import { useSimulationStore } from "@/store/simulationStore";
 import { useCanvasStore, type ComponentNodeData } from "@/store/canvasStore";
 import type { ComponentFault, RequestProfile } from "@/types/simulation";
 import { MAX_SIMULATION_QPS, MIN_SIMULATION_QPS } from "@/engine/constants";
+import { useTutorialStore } from "@/store/tutorialStore";
 
 const PRESETS = [
   { label: "Light", value: 1000 },
@@ -62,7 +63,9 @@ export function SimulationControls({ onSimulate }: SimulationControlsProps) {
   const setConfig = useSimulationStore((s) => s.setConfig);
   const isRunning = useSimulationStore((s) => s.isRunning);
   const nodes = useCanvasStore((s) => s.nodes);
+  const activeTab = useCanvasStore((s) => s.tabs.find((tab) => tab.id === s.activeTabId));
   const componentNodes = nodes.filter((node) => node.type !== "text");
+  const tutorialHighlight = useTutorialStore((state) => state.highlightTarget);
   const faults = config.faults ?? {};
   const [profilesDraft, setProfilesDraft] = useState(() => JSON.stringify(config.requestProfiles ?? [], null, 2));
   const [profilesError, setProfilesError] = useState(false);
@@ -75,10 +78,23 @@ export function SimulationControls({ onSimulate }: SimulationControlsProps) {
   };
 
   return (
-    <div className="space-y-4">
+    <div
+      data-tutorial-target="control:simulation-tab"
+      data-tutorial-highlight={tutorialHighlight?.kind === "control" && (tutorialHighlight.id === "simulation-tab" || tutorialHighlight.id === "tutorial-run") ? "true" : undefined}
+      className="space-y-4"
+    >
       <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
         Simulation Config
       </p>
+      {activeTab?.readOnly && activeTab.requestsPerSec !== undefined && (
+        <button
+          type="button"
+          onClick={() => setConfig({ requestsPerSec: activeTab.requestsPerSec! })}
+          className="w-full rounded-md border border-cyan-900/70 bg-cyan-950/30 px-2.5 py-2 text-left text-[11px] text-cyan-200 hover:bg-cyan-950/50"
+        >
+          Use this reference tier&apos;s {activeTab.requestsPerSec.toLocaleString()} req/s load
+        </button>
+      )}
 
       {/* Presets */}
       <div className="flex gap-1.5">

@@ -12,8 +12,17 @@ export interface ProblemHint {
 }
 
 export interface ReferenceSolution {
-  nodes: Array<{ componentId: string; x: number; y: number }>;
-  edges: Array<{ source: string; target: string }>;
+  nodes: Array<{ componentId: string; x: number; y: number; replicas?: number }>;
+  edges: Array<{ source: string; target: string; data?: { label?: string; protocol?: string; async?: boolean } }>;
+}
+
+export type ReferenceLoadTier = "low" | "medium" | "high";
+
+export interface ReferenceVariant {
+  tier: ReferenceLoadTier;
+  requestsPerSec: number;
+  summary: string;
+  solution: ReferenceSolution;
 }
 
 export interface Problem {

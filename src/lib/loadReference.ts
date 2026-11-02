@@ -1,5 +1,5 @@
 import type { Node, Edge } from "@xyflow/react";
-import type { Problem } from "@/types/problem";
+import type { Problem, ReferenceVariant } from "@/types/problem";
 import { getComponentById } from "@/data/components";
 import { useCanvasStore, type ComponentNodeData } from "@/store/canvasStore";
 import { useAppStore } from "@/store/appStore";
@@ -14,7 +14,7 @@ import { compileDesign } from "@/engine/compiler";
  *   round-robin by occurrence order (independent counters for source/target
  *   roles so chains like A -> B -> C stay connected through the same instance).
  */
-export function buildReferenceGraph(problem: Problem): {
+export function buildReferenceGraph(problem: Problem, variant?: ReferenceVariant): {
   nodes: Node<ComponentNodeData>[];
   edges: Edge[];
 } {
@@ -22,7 +22,8 @@ export function buildReferenceGraph(problem: Problem): {
   const instancesByComponent = new Map<string, string[]>();
   const refNodes: Node<ComponentNodeData>[] = [];
 
-  problem.referenceSolution.nodes.forEach((ref, index) => {
+  const solution = variant?.solution ?? problem.referenceSolution;
+  solution.nodes.forEach((ref, index) => {
     const comp = getComponentById(ref.componentId);
     if (!comp) return;
 
@@ -40,7 +41,7 @@ export function buildReferenceGraph(problem: Problem): {
         label: comp.label,
         icon: comp.icon,
         category: comp.category,
-        replicas: 1,
+        replicas: ref.replicas ?? 1,
         maxQPS: comp.maxQPS,
         latencyMs: comp.latencyMs,
         scalable: comp.scalable,
@@ -53,7 +54,7 @@ export function buildReferenceGraph(problem: Problem): {
     const gateways = refNodes.filter((node) => node.data.componentId === "api-gateway");
     const cacheId = instancesByComponent.get("cache")?.[0];
     const databaseId = instancesByComponent.get("nosql-db")?.[0];
-    if (cacheId && databaseId) {
+    if (databaseId) {
       for (const appServer of appServers) {
         appServer.data.replicas = 3;
         appServer.data.endpoints = [
@@ -63,16 +64,16 @@ export function buildReferenceGraph(problem: Problem): {
             path: "/:code",
             trafficWeight: 100,
             steps: [
-              {
+              ...(cacheId ? [{
                 id: "reference-cache-read",
-                kind: "cache-read",
+                kind: "cache-read" as const,
                 targetNodeId: cacheId,
                 target: "url:{code}",
                 cacheHitRate: 0.9,
-              },
+              }] : []),
               {
                 id: "reference-url-read",
-                kind: "database-read",
+                kind: "database-read" as const,
                 targetNodeId: databaseId,
                 target: "urls.shortCode",
               },
@@ -87,16 +88,16 @@ export function buildReferenceGraph(problem: Problem): {
             steps: [
               {
                 id: "reference-url-write",
-                kind: "database-write",
+                kind: "database-write" as const,
                 targetNodeId: databaseId,
                 target: "urls.shortCode,longUrl",
               },
-              {
+              ...(cacheId ? [{
                 id: "reference-cache-invalidate",
-                kind: "cache-invalidate",
+                kind: "cache-invalidate" as const,
                 targetNodeId: cacheId,
                 target: "url:{code}",
-              },
+              }] : []),
               { id: "reference-create-response", kind: "respond" },
             ],
           },
@@ -392,11 +393,13 @@ export function buildReferenceGraph(problem: Problem): {
     const gateways = refNodes.filter((node) => node.data.componentId === "api-gateway");
     const caches = refNodes.filter((node) => node.data.componentId === "cache");
     const queues = refNodes.filter((node) => node.data.componentId === "message-queue");
+    const processors = refNodes.filter((node) => node.data.componentId === "stream-processor");
     const noSqlDatabases = refNodes.filter((node) => node.data.componentId === "nosql-db");
     const backend = appServers[0];
     const cacheId = caches[0]?.id;
     const queueId = queues[0]?.id;
     const databaseId = noSqlDatabases[0]?.id;
+    const playEventConsumerId = processors[0]?.id ?? databaseId;
 
     for (const appServer of appServers) {
       appServer.data.replicas = 3;
@@ -509,9 +512,9 @@ export function buildReferenceGraph(problem: Problem): {
       queue.data.queueDeliveryMode = "competing";
       queue.data.queueConfig = {
         topics: [{ id: "reference-play-events-topic", name: "play-events", retentionHours: 24 }],
-        subscriptions: databaseId ? [{
+        subscriptions: playEventConsumerId ? [{
           id: "reference-play-history-subscription",
-          consumerNodeId: databaseId,
+          consumerNodeId: playEventConsumerId,
           topicName: "play-events",
         }] : [],
       };
@@ -1136,6 +1139,56 @@ export function buildReferenceGraph(problem: Problem): {
     };
   }
 
+  if (variant) {
+    const occurrenceByComponent = new Map<string, number>();
+    for (const ref of solution.nodes) {
+      const occurrence = occurrenceByComponent.get(ref.componentId) ?? 0;
+      occurrenceByComponent.set(ref.componentId, occurrence + 1);
+      const nodeId = instancesByComponent.get(ref.componentId)?.[occurrence];
+      const node = refNodes.find((item) => item.id === nodeId);
+      if (node && ref.replicas !== undefined) node.data.replicas = ref.replicas;
+    }
+    const nodeIdByComponent = new Map<string, string>();
+    for (const [componentId, instanceIds] of instancesByComponent) {
+      const count = occurrenceByComponent.get(componentId) ?? 0;
+      if (count === 1 && instanceIds[0]) nodeIdByComponent.set(componentId, instanceIds[0]);
+    }
+    for (const node of refNodes) {
+      if (node.data.componentId === "app-server" && Array.isArray(node.data.endpoints)) {
+        node.data.endpoints = node.data.endpoints.map((endpoint) => ({
+          ...endpoint,
+          steps: endpoint.steps.map((step) => {
+            if (!step.targetNodeId) return step;
+            const target = refNodes.find((candidate) => candidate.id === step.targetNodeId);
+            const targetComponentId = target?.data.componentId;
+            const replacementId = targetComponentId ? nodeIdByComponent.get(targetComponentId) : undefined;
+            return replacementId ? { ...step, targetNodeId: replacementId } : step;
+          }),
+        }));
+      }
+      if (node.data.componentId === "api-gateway" && Array.isArray(node.data.routes)) {
+        node.data.routes = node.data.routes.map((route) => {
+          if (!route.backendNodeId) return route;
+          const target = refNodes.find((candidate) => candidate.id === route.backendNodeId);
+          const targetComponentId = target?.data.componentId;
+          const replacementId = targetComponentId ? nodeIdByComponent.get(targetComponentId) : undefined;
+          return replacementId ? { ...route, backendNodeId: replacementId } : route;
+        });
+      }
+      if (node.data.componentId === "message-queue" && node.data.queueConfig?.subscriptions) {
+        node.data.queueConfig = {
+          ...node.data.queueConfig,
+          subscriptions: node.data.queueConfig.subscriptions.map((subscription) => {
+            const target = refNodes.find((candidate) => candidate.id === subscription.consumerNodeId);
+            const targetComponentId = target?.data.componentId;
+            const replacementId = targetComponentId ? nodeIdByComponent.get(targetComponentId) : undefined;
+            return replacementId ? { ...subscription, consumerNodeId: replacementId } : subscription;
+          }),
+        };
+      }
+    }
+  }
+
   // Round-robin counters, keyed by `${componentId}#${role}`
   const rrCounters = new Map<string, number>();
   const nextInstance = (componentId: string, role: "source" | "target"): string | undefined => {
@@ -1148,7 +1201,7 @@ export function buildReferenceGraph(problem: Problem): {
   };
 
   const refEdges: Edge[] = [];
-  for (const ref of problem.referenceSolution.edges) {
+  for (const ref of solution.edges) {
     const sourceId = nextInstance(ref.source, "source");
     const targetId = nextInstance(ref.target, "target");
     if (sourceId && targetId) {
@@ -1157,8 +1210,10 @@ export function buildReferenceGraph(problem: Problem): {
         ref.source === "stream-processor" &&
         ref.target === "object-storage";
       const isAsyncPubSubEdge =
+        (problem.id === "notification-system" && ref.source === "app-server" && ref.target === "message-queue") ||
         (problem.id === "parking-lot" && ref.source === "message-queue" && ref.target === "sql-db") ||
         (problem.id === "notification-system" && ref.source === "message-queue" && ref.target === "notification-service") ||
+        (problem.id === "music-streaming" && ref.source === "stream-processor" && ref.target === "nosql-db") ||
         (problem.id === "music-streaming" && ref.source === "message-queue" && ref.target === "nosql-db") ||
         (problem.id === "instagram" && ref.source === "message-queue" && ref.target === "stream-processor") ||
         (problem.id === "video-streaming" && ref.source === "message-queue" && ref.target === "stream-processor");
@@ -1167,7 +1222,9 @@ export function buildReferenceGraph(problem: Problem): {
         source: sourceId,
         target: targetId,
         type: "animated",
-        ...(isVideoProcessingStorageWrite
+        ...(ref.data
+          ? { data: ref.data }
+          : isVideoProcessingStorageWrite
           ? { data: { protocol: "http", async: true } }
           : isAsyncPubSubEdge
             ? { data: { protocol: "pubsub", async: true } }
@@ -1183,18 +1240,19 @@ export function buildReferenceGraph(problem: Problem): {
  * Open a problem's reference solution in a read-only canvas tab.
  * The user's current design stays untouched in its own tab.
  */
-export function loadReferenceIntoTab(problem: Problem): void {
-  const { nodes, edges } = buildReferenceGraph(problem);
+export function loadReferenceIntoTab(problem: Problem, variant?: ReferenceVariant): void {
+  const { nodes, edges } = buildReferenceGraph(problem, variant);
   const compilation = compileDesign(nodes, edges);
   const designOnly = !compilation.ok;
 
   useCanvasStore.getState().addTab({
-    id: `ref-${problem.id}`,
+    id: variant ? `ref-${problem.id}-${variant.tier}` : `ref-${problem.id}`,
     label: designOnly
-      ? `${problem.title} (Architecture Only)`
-      : `${problem.title} (Reference)`,
+      ? `${problem.title}${variant ? ` · ${variant.tier} ${variant.requestsPerSec.toLocaleString()} req/s` : ""} (Architecture Only)`
+      : `${problem.title}${variant ? ` · ${variant.tier} ${variant.requestsPerSec.toLocaleString()} req/s` : ""} (Reference)`,
     nodes,
     edges,
+    ...(variant ? { requestsPerSec: variant.requestsPerSec } : {}),
     readOnly: true,
     designOnly,
   });
@@ -1204,7 +1262,9 @@ export function loadReferenceIntoTab(problem: Problem): void {
     .showToast(
       designOnly
         ? "Architecture-only reference opened — compile issues prevent simulation"
-        : "Reference opened in new tab — your design is safe",
+        : variant
+          ? `${variant.summary} Reference opened in a separate tab.`
+          : "Reference opened in new tab — your design is safe",
       designOnly ? "info" : "success"
     );
 }

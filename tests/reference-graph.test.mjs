@@ -65,6 +65,15 @@ referenceSource = referenceSource
   .replace('from "@/engine/compiler"', `from "${compilerUrl}"`);
 const { buildReferenceGraph } = await import(asDataUrl(referenceSource, "loadReference.ts"));
 const { PROBLEMS } = await import(problemsUrl);
+const componentIdsSource = (await source("src/data/components.ts"))
+  .replace('from "@/store/customComponentsStore"', `from "${componentStoreUrl}"`);
+const { SYSTEM_COMPONENTS } = await import(asDataUrl(componentIdsSource, "componentIds.ts"));
+const COMPONENT_IDS = new Set(SYSTEM_COMPONENTS.map(({ id }) => id));
+const variantsSource = await source("src/data/referenceVariants.ts");
+const resolvedVariantsSource = variantsSource
+  .replace('from "@/data/problems"', `from "${problemsUrl}"`)
+  .replace('from "@/types/problem"', 'from "data:text/javascript,export%20{}"');
+const { REFERENCE_VARIANTS } = await import(asDataUrl(resolvedVariantsSource, "referenceVariants.ts"));
 
 test("Parking Lot reference graph compiles with topic subscriptions and async queue edge", () => {
   const problem = PROBLEMS.find(({ id }) => id === "parking-lot");
@@ -362,5 +371,88 @@ test("All built-in references have an explicit executable or architecture-only c
         `${problem.id} has an unexpected compile diagnostic: ${JSON.stringify(compilation.diagnostics)}`,
       );
     }
+  }
+});
+
+test("each complete-reference system has independently authored evolving tier graphs", () => {
+  const expectedSystems = ["url-shortener", "video-streaming", "rate-limiter", "notification-system", "parking-lot", "instagram", "music-streaming"];
+  const signatures = new Set();
+  for (const problemId of expectedSystems) {
+    const variants = REFERENCE_VARIANTS[problemId];
+    assert.deepEqual(Object.keys(variants).sort(), ["high", "low", "medium"]);
+    const tierSignatures = [];
+    for (const tier of ["low", "medium", "high"]) {
+      const variant = variants[tier];
+      const problem = PROBLEMS.find(({ id }) => id === problemId);
+      assert.equal(variant.tier, tier);
+      assert.ok(variant.requestsPerSec > 0);
+      assert.ok(variant.summary.length > 20);
+      assert.ok(variant.solution.nodes.length > 0);
+      assert.ok(variant.solution.edges.length > 0);
+      assert.ok(variant.solution.nodes.every(({ replicas }) => replicas !== undefined && replicas > 0));
+      const nodeIds = new Set(variant.solution.nodes.map(({ componentId }) => componentId));
+      assert.equal(nodeIds.size, variant.solution.nodes.length, `${problemId}/${tier} must not repeat a componentId`);
+      assert.ok(variant.solution.edges.every(({ source, target }) => nodeIds.has(source) && nodeIds.has(target)), `${problemId}/${tier} has an orphaned edge`);
+      assert.ok(variant.solution.nodes.every(({ componentId }) => COMPONENT_IDS.has(componentId)), `${problemId}/${tier} contains an unknown component`);
+      const { nodes, edges } = buildReferenceGraph(problem, variant);
+      assert.equal(nodes.length, variant.solution.nodes.length);
+      assert.equal(edges.length, variant.solution.edges.length);
+      const compilation = compileDesign(nodes, edges);
+      assert.equal(compilation.ok, true, `${problemId}/${tier} should compile: ${JSON.stringify(compilation.diagnostics)}`);
+      assert.equal(new Set(edges.map(({ source, target }) => `${source}->${target}`)).size, edges.length, `${problemId}/${tier} must not produce duplicate connections`);
+
+      const connectedTargets = new Set(edges.map(({ source, target }) => `${source}->${target}`));
+      for (const app of nodes.filter(({ data }) => data.componentId === "app-server")) {
+        for (const endpoint of app.data.endpoints ?? []) {
+          for (const step of endpoint.steps ?? []) {
+            if (step.kind !== "publish-event") continue;
+            const queue = nodes.find(({ id }) => id === step.targetNodeId);
+            assert.equal(queue?.data.componentId, "message-queue", `${problemId}/${tier} publisher must target its queue`);
+            assert.ok(queue.data.queueConfig.topics.some(({ name }) => name === step.target), `${problemId}/${tier} publisher topic ${step.target} must be configured`);
+            const producerEdge = edges.find(({ source, target }) => source === app.id && target === queue.id);
+            assert.equal(producerEdge?.data?.async, true, `${problemId}/${tier} queue publishing edge must be asynchronous`);
+          }
+        }
+      }
+      for (const queue of nodes.filter(({ data }) => data.componentId === "message-queue")) {
+        for (const subscription of queue.data.queueConfig?.subscriptions ?? []) {
+          assert.ok(connectedTargets.has(`${queue.id}->${subscription.consumerNodeId}`), `${problemId}/${tier} subscription consumer must have a queue edge`);
+          assert.ok(queue.data.queueConfig.topics.some(({ name }) => name === subscription.topicName), `${problemId}/${tier} subscription must use a configured topic`);
+          const consumerEdge = edges.find(({ source, target }) => source === queue.id && target === subscription.consumerNodeId);
+          assert.equal(consumerEdge?.data?.async, true, `${problemId}/${tier} queue consumer edge must be asynchronous`);
+        }
+      }
+      assert.ok(variant.solution.nodes.some(({ replicas }) => replicas > 1) === (tier !== "low"), `${problemId}/${tier} replica profile should match tier`);
+      tierSignatures.push(JSON.stringify({
+        nodes: variant.solution.nodes.map(({ componentId }) => componentId).sort(),
+        edges: variant.solution.edges.map(({ source, target, data }) => [source, target, data?.async ?? false, data?.protocol ?? ""]).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+      }));
+    }
+    assert.equal(new Set(tierSignatures).size, 3, `${problemId} must have three distinct evolving topologies`);
+    for (const signature of tierSignatures) {
+      assert.ok(!signatures.has(signature), `${problemId} tier topology unexpectedly duplicates another reference`);
+      signatures.add(signature);
+    }
+  }
+  assert.equal(signatures.size, expectedSystems.length * 3, "all 21 reference topologies must be unique");
+});
+
+test("high-load reference deltas describe modeled behavior rather than unused components", () => {
+  const urlHigh = REFERENCE_VARIANTS["url-shortener"].high.solution;
+  assert.ok(!urlHigh.nodes.some(({ componentId }) => ["message-queue", "stream-processor"].includes(componentId)));
+  assert.match(REFERENCE_VARIANTS["url-shortener"].high.summary, /abuse protection/i);
+
+  const parkingHigh = REFERENCE_VARIANTS["parking-lot"].high.solution;
+  assert.ok(!parkingHigh.nodes.some(({ componentId }) => componentId === "distributed-lock"));
+  assert.ok(parkingHigh.nodes.some(({ componentId }) => componentId === "monitoring"));
+
+  const instagramHigh = REFERENCE_VARIANTS.instagram.high.solution;
+  assert.ok(!instagramHigh.nodes.some(({ componentId }) => componentId === "sharded-counter"));
+  assert.ok(instagramHigh.nodes.some(({ componentId }) => componentId === "monitoring"));
+
+  for (const tier of ["medium", "high"]) {
+    const variant = REFERENCE_VARIANTS["music-streaming"][tier];
+    const queueConsumer = variant.solution.edges.find(({ source }) => source === "message-queue")?.target;
+    assert.equal(queueConsumer, tier === "high" ? "stream-processor" : "nosql-db");
   }
 });

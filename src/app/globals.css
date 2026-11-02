@@ -330,6 +330,16 @@ button:not([disabled]):active { scale: 0.97; }
    `transform` here makes the handle jump on hover. */
 .react-flow__handle:hover { scale: 1.2; }
 
+[data-tutorial-highlight="true"] {
+  outline: 2px solid oklch(0.82 0.16 85);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px oklch(0.82 0.16 85 / 0.18), 0 0 24px oklch(0.82 0.16 85 / 0.28);
+}
+
+svg [data-tutorial-highlight="true"] {
+  filter: drop-shadow(0 0 5px oklch(0.82 0.16 85 / 0.8));
+}
+
 /* Keep React Flow Controls clickable above the pen overlay (overlay z-index: 5) */
 .react-flow .react-flow__controls { z-index: 6; }
 

@@ -5,6 +5,7 @@ import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { motion } from "framer-motion";
 import type { ComponentNodeData } from "@/store/canvasStore";
 import { useCanvasStore } from "@/store/canvasStore";
+import { useTutorialStore } from "@/store/tutorialStore";
 import { Server } from "lucide-react";
 import { ICON_MAP } from "@/lib/icons";
 import { useIsCoarsePointer } from "@/hooks/useBreakpoint";
@@ -45,6 +46,9 @@ function ComponentNodeInner({ id, data, selected }: NodeProps<ComponentNode>) {
   const inputRef = useRef<HTMLInputElement>(null);
   const updateNodeData = useCanvasStore((s) => s.updateNodeData);
   const isCoarse = useIsCoarsePointer();
+  const tutorialHighlight = useTutorialStore((state) => state.highlightTarget);
+  const tutorialHighlighted = tutorialHighlight?.kind === "node" && tutorialHighlight.componentId === nodeData.componentId;
+  const tutorialTargetId = `node:${nodeData.componentId}:${id}`;
 
   useEffect(() => {
     if (editing && inputRef.current) {
@@ -79,10 +83,14 @@ function ComponentNodeInner({ id, data, selected }: NodeProps<ComponentNode>) {
 
   return (
     <div
+      data-tutorial-target={tutorialTargetId}
+      data-tutorial-highlight={tutorialHighlighted ? "true" : undefined}
       className={`
         group relative flex flex-col items-center gap-1 rounded-xl border bg-zinc-900 px-4 py-3
         shadow-[var(--shadow-e2)] transition-[border-color,box-shadow] duration-150
-        ${isBottleneck
+        ${tutorialHighlighted
+          ? "border-amber-400 ring-4 ring-amber-400/40 shadow-[0_0_24px_rgba(251,191,36,0.28)]"
+          : isBottleneck
           ? "border-rose-500/60 ring-2 ring-rose-500/20"
           : selected
             ? "border-cyan-500/80 ring-2 ring-cyan-500/30"

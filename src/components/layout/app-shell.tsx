@@ -34,6 +34,10 @@ import { TutorialCoach } from "@/components/tutorial/TutorialCoach";
 import { useTutorialStore } from "@/store/tutorialStore";
 import { TUTORIAL_BY_PROBLEM_ID } from "@/data/tutorials";
 import { getTutorialDesignSignature } from "@/lib/tutorialEvaluator";
+import { ReferenceTierDialog } from "@/components/dialogs/ReferenceTierDialog";
+import { getReferenceVariant } from "@/data/referenceVariants";
+import type { ReferenceLoadTier } from "@/types/problem";
+import type { TutorialHighlightTarget } from "@/store/tutorialStore";
 
 export function AppShell() {
   const isMobile = useIsMobile();
@@ -55,6 +59,7 @@ export function AppShell() {
   const [commandOpen, setCommandOpen] = useState(false);
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
   const [walkthroughOpen, setWalkthroughOpen] = useState(false);
+  const [referenceProblemId, setReferenceProblemId] = useState<string | null>(null);
 
   // Load persisted state from localStorage once, after mount. All stores use
   // `skipHydration: true` (so SSR and first client render agree), so without
@@ -252,6 +257,66 @@ export function AppShell() {
     useCanvasStore.getState().clearCanvas();
   }, []);
 
+  const handleShowCompleteDesign = useCallback((problemId: string) => {
+    useAppStore.getState().setSelectedProblem(problemId);
+    setReferenceProblemId(problemId);
+    if (isMobile) setMobileSidebarOpen(false);
+  }, [isMobile]);
+
+  const handleSelectReferenceTier = useCallback((tier: ReferenceLoadTier) => {
+    if (!referenceProblemId) return;
+    const problem = PROBLEMS.find((item) => item.id === referenceProblemId);
+    const variant = getReferenceVariant(referenceProblemId, tier);
+    if (!problem || !variant) {
+      useAppStore.getState().showToast("This load-tier reference is not available yet", "info");
+      return;
+    }
+    loadReferenceIntoTab(problem, variant);
+    setReferenceProblemId(null);
+  }, [referenceProblemId]);
+
+  const handleNavigateToTutorialTarget = useCallback((target: TutorialHighlightTarget) => {
+    if (target.kind === "palette") {
+      useAppStore.getState().setActiveLeftTab("components");
+      useAppStore.getState().setLeftSidebarOpen(true);
+      if (isMobile) setMobileSidebarOpen(true);
+      return;
+    }
+    if (target.kind === "control" && target.id === "simulation-tab") {
+      useAppStore.getState().setActiveRightTab("simulation");
+      if (isMobile) setMobileRightOpen(true);
+      else if (!useAppStore.getState().rightPanelOpen) useAppStore.getState().toggleRightPanel();
+      return;
+    }
+    if (target.kind === "control" && target.id === "tutorial-run") return;
+    if (target.kind === "control" && target.id === "edge-communication") {
+      useAppStore.getState().setActiveRightTab("properties");
+      if (isMobile) setMobileRightOpen(true);
+      else if (!useAppStore.getState().rightPanelOpen) useAppStore.getState().toggleRightPanel();
+      return;
+    }
+    if (target.kind === "edge") {
+      const state = useCanvasStore.getState();
+      const sourceNode = state.nodes.find((node) => node.type !== "text" && (node.data as ComponentNodeData).componentId === target.sourceComponentId);
+      const targetNode = state.nodes.find((node) => node.type !== "text" && (node.data as ComponentNodeData).componentId === target.targetComponentId);
+      const edge = state.edges.find((item) => item.source === sourceNode?.id && item.target === targetNode?.id);
+      if (edge) state.setSelectedEdge(edge.id);
+      useAppStore.getState().setActiveRightTab("properties");
+      if (isMobile) setMobileRightOpen(true);
+      else if (!useAppStore.getState().rightPanelOpen) useAppStore.getState().toggleRightPanel();
+      return;
+    }
+    if (target.kind === "node" || target.kind === "control") {
+      const state = useCanvasStore.getState();
+      const matches = state.nodes.filter((item) => item.type !== "text" && (item.data as ComponentNodeData).componentId === target.componentId);
+      const node = matches[target.kind === "control" ? target.componentInstance ?? 0 : 0];
+      if (node) state.setSelectedNode(node.id);
+      useAppStore.getState().setActiveRightTab("properties");
+      if (isMobile) setMobileRightOpen(true);
+      else if (!useAppStore.getState().rightPanelOpen) useAppStore.getState().toggleRightPanel();
+    }
+  }, [isMobile]);
+
   const handleLoadReference = useCallback(() => {
     const problemId = useAppStore.getState().selectedProblemId;
     const problem = PROBLEMS.find((p) => p.id === problemId);
@@ -379,6 +444,7 @@ export function AppShell() {
           <Sidebar
             open={leftSidebarOpen}
             onStartTutorial={handleStartTutorial}
+            onShowCompleteDesign={handleShowCompleteDesign}
             onCreateProblem={() => setCreateProblemDialogOpen(true)}
             onCreateCustomComponent={() => setCreateComponentDialogOpen(true)}
             variant="desktop"
@@ -393,6 +459,7 @@ export function AppShell() {
           <TutorialCoach
             onRunScenario={handleRunTutorialScenario}
             onResetCanvas={handleResetTutorialCanvas}
+            onNavigateToTarget={handleNavigateToTutorialTarget}
           />
 
           {/* Desktop inline right panel (hidden on mobile) */}
@@ -429,6 +496,7 @@ export function AppShell() {
                 <div className="min-h-0 flex-1">
                   <Sidebar
                     onStartTutorial={handleStartTutorial}
+                    onShowCompleteDesign={handleShowCompleteDesign}
                     onCreateProblem={() => {
                       setCreateProblemDialogOpen(true);
                       setMobileSidebarOpen(false);
@@ -513,6 +581,14 @@ export function AppShell() {
           onClose={() => setWalkthroughOpen(false)}
           onPickProblem={handlePickProblem}
         />
+        {referenceProblemId && (
+          <ReferenceTierDialog
+            open
+            problemTitle={PROBLEMS.find((item) => item.id === referenceProblemId)?.title ?? referenceProblemId}
+            onClose={() => setReferenceProblemId(null)}
+            onSelect={handleSelectReferenceTier}
+          />
+        )}
       </div>
     </ReactFlowProvider>
   );
