@@ -12,7 +12,7 @@ function asDataUrl(source, fileName) {
 }
 
 const readSource = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-const [tutorialsSource, tracksSource, problemCatalogSource, componentCatalogSource, runtimeEditorSource, rightPanelSource, simulationControlsSource, tutorialCoachSource, paletteSource, componentNodeSource, animatedEdgeSource] = await Promise.all([
+const [tutorialsSource, tracksSource, problemCatalogSource, componentCatalogSource, runtimeEditorSource, rightPanelSource, simulationControlsSource, tutorialCoachSource, appShellSource, paletteSource, componentNodeSource, animatedEdgeSource] = await Promise.all([
   readSource("src/data/tutorials.ts"),
   readSource("src/data/tutorialTracks.ts"),
   readSource("src/data/problems.ts"),
@@ -21,10 +21,24 @@ const [tutorialsSource, tracksSource, problemCatalogSource, componentCatalogSour
   readSource("src/components/panel/RightPanel.tsx"),
   readSource("src/components/panel/SimulationControls.tsx"),
   readSource("src/components/tutorial/TutorialCoach.tsx"),
+  readSource("src/components/layout/app-shell.tsx"),
   readSource("src/components/sidebar/ComponentPalette.tsx"),
   readSource("src/components/canvas/nodes/ComponentNode.tsx"),
   readSource("src/components/canvas/edges/AnimatedEdge.tsx"),
 ]);
+
+test("reopening a guided build preserves saved progress and offers resume outside its tab", () => {
+  const startHandler = appShellSource.match(/const handleStartTutorial = useCallback\(\(problemId: string\) => \{([\s\S]*?)\n  \}, \[isMobile\]\);/);
+  assert.ok(startHandler, "tutorial start handler should exist");
+  assert.doesNotMatch(startHandler[1], /\.reset\(problemId\)/);
+  assert.match(startHandler[1], /canvas\.tabs\.some/);
+  assert.match(startHandler[1], /addTab\(/);
+  assert.match(startHandler[1], /if \(!areStoresHydrated\(\)\)[\s\S]*?rehydrateAllStores\(\)\.then\(begin\)/);
+  assert.match(tutorialCoachSource, /activeTabId !== tabId[\s\S]*?Resume guided build/);
+  assert.match(tutorialCoachSource, /onResumeTutorial\(resumableProblemId\)/);
+  assert.match(tutorialCoachSource, /tutorialTabProblemId\(activeTabId\)/);
+  assert.match(tutorialCoachSource, /\[\.\.\.tabs\]\.reverse\(\)/);
+});
 const customProblemStoreUrl = asDataUrl(
   "export const useCustomProblemsStore = { getState: () => ({}) };",
   "customProblemsStore.ts",

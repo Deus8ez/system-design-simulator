@@ -21,9 +21,10 @@ interface TutorialCoachProps {
   onRunScenario: (requestsPerSec: number) => void;
   onResetCanvas: () => void;
   onNavigateToTarget: (target: TutorialHighlightTarget) => void;
+  onResumeTutorial: (problemId: string) => void;
 }
 
-export function TutorialCoach({ onRunScenario, onResetCanvas, onNavigateToTarget }: TutorialCoachProps) {
+export function TutorialCoach({ onRunScenario, onResetCanvas, onNavigateToTarget, onResumeTutorial }: TutorialCoachProps) {
   const activeProblemId = useTutorialStore((state) => state.activeProblemId);
   const progressByProblem = useTutorialStore((state) => state.progressByProblem);
   const completeStep = useTutorialStore((state) => state.completeStep);
@@ -34,6 +35,7 @@ export function TutorialCoach({ onRunScenario, onResetCanvas, onNavigateToTarget
   const hideTutorial = useTutorialStore((state) => state.hide);
   const setHighlightTarget = useTutorialStore((state) => state.setHighlightTarget);
   const activeTabId = useCanvasStore((state) => state.activeTabId);
+  const tabs = useCanvasStore((state) => state.tabs);
   const nodes = useCanvasStore((state) => state.nodes);
   const edges = useCanvasStore((state) => state.edges);
   const requestProfiles = useSimulationStore((state) => state.config.requestProfiles);
@@ -45,14 +47,23 @@ export function TutorialCoach({ onRunScenario, onResetCanvas, onNavigateToTarget
   const [activeGuidanceIndex, setActiveGuidanceIndex] = useState(0);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
-  const tutorial = activeProblemId ? TUTORIAL_BY_PROBLEM_ID.get(activeProblemId) : undefined;
-  const progress = activeProblemId ? progressByProblem[activeProblemId] : undefined;
-  const tabId = activeProblemId ? `tutorial-${activeProblemId}` : "";
+  const tutorialTabProblemId = (tabId: string) => {
+    const problemId = tabId.startsWith("tutorial-") ? tabId.slice("tutorial-".length) : "";
+    return TUTORIAL_BY_PROBLEM_ID.has(problemId) ? problemId : undefined;
+  };
+  const resumableProblemId = activeProblemId && TUTORIAL_BY_PROBLEM_ID.has(activeProblemId)
+    ? activeProblemId
+    : tutorialTabProblemId(activeTabId) ??
+      [...tabs].reverse().map((tab) => tutorialTabProblemId(tab.id)).find(Boolean) ??
+      Object.keys(progressByProblem).reverse().find((problemId) => TUTORIAL_BY_PROBLEM_ID.has(problemId));
+  const tutorial = resumableProblemId ? TUTORIAL_BY_PROBLEM_ID.get(resumableProblemId) : undefined;
+  const progress = resumableProblemId ? progressByProblem[resumableProblemId] : undefined;
+  const tabId = resumableProblemId ? `tutorial-${resumableProblemId}` : "";
   const level = tutorial?.levels.find((item) => item.id === progress?.currentLevel) ?? tutorial?.levels[0];
   const completedIds = progress?.completedStepIds ?? [];
   const currentStep = level?.steps.find((step) => !completedIds.includes(step.id));
-  const problemTitle = PROBLEMS.find((problem) => problem.id === activeProblemId)?.title ?? activeProblemId;
-  const currentObjectiveKey = `${activeProblemId ?? ""}:${level?.id ?? ""}:${currentStep?.id ?? ""}`;
+  const problemTitle = PROBLEMS.find((problem) => problem.id === resumableProblemId)?.title ?? resumableProblemId;
+  const currentObjectiveKey = `${resumableProblemId ?? ""}:${level?.id ?? ""}:${currentStep?.id ?? ""}`;
   const guidance = currentStep ? getTutorialGuidance(currentStep) : [];
 
   useEffect(() => {
@@ -90,7 +101,21 @@ export function TutorialCoach({ onRunScenario, onResetCanvas, onNavigateToTarget
     });
   };
 
-  if (!tutorial || !progress || activeTabId !== tabId || !level) return null;
+  if (!tutorial || !resumableProblemId) return null;
+
+  if (!activeProblemId || !progress || activeProblemId !== resumableProblemId || activeTabId !== tabId || !level) {
+    return (
+      <button
+        type="button"
+        onClick={() => onResumeTutorial(resumableProblemId)}
+        aria-label={`${isHidden ? "Show" : "Resume"} ${problemTitle} tutorial`}
+        className="absolute bottom-3 left-1/2 z-20 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-cyan-500/30 bg-zinc-950/95 px-3 py-2 text-xs font-medium text-cyan-200 shadow-xl backdrop-blur transition-colors hover:border-cyan-400/50 hover:bg-zinc-900"
+      >
+        <BookOpen className="h-3.5 w-3.5" />
+        {isHidden ? "Show tutorial" : "Resume guided build"}
+      </button>
+    );
+  }
 
   if (isHidden) {
     return (

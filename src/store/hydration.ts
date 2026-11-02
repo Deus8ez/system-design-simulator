@@ -17,6 +17,7 @@ import { useTutorialStore } from "./tutorialStore";
  */
 
 let hasHydrated = false;
+let rehydrationPromise: Promise<void> | null = null;
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -31,6 +32,9 @@ function subscribe(listener: () => void): () => void {
 }
 
 export function rehydrateAllStores(): Promise<void> {
+  if (hasHydrated) return Promise.resolve();
+  if (rehydrationPromise) return rehydrationPromise;
+
   const results: (void | Promise<void>)[] = [
     useAppStore.persist.rehydrate(),
     useCanvasStore.persist.rehydrate(),
@@ -42,10 +46,17 @@ export function rehydrateAllStores(): Promise<void> {
     useInterviewStore.persist.rehydrate(),
     useTutorialStore.persist.rehydrate(),
   ];
-  return Promise.all(results.map((r) => Promise.resolve(r))).then(() => {
+  rehydrationPromise = Promise.all(results.map((r) => Promise.resolve(r))).then(() => {
     hasHydrated = true;
     emit();
+  }).finally(() => {
+    rehydrationPromise = null;
   });
+  return rehydrationPromise;
+}
+
+export function areStoresHydrated(): boolean {
+  return hasHydrated;
 }
 
 /**

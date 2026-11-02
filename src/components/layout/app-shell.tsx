@@ -27,7 +27,7 @@ import { useIsMobile } from "@/hooks/useBreakpoint";
 import { CommandPalette } from "@/components/CommandPalette";
 import { HowItWorksDialog } from "@/components/dialogs/HowItWorksDialog";
 import { Walkthrough } from "@/components/Walkthrough";
-import { rehydrateAllStores } from "@/store/hydration";
+import { areStoresHydrated, rehydrateAllStores } from "@/store/hydration";
 import { compileDesign } from "@/engine/compiler";
 import type { CustomEdgeData } from "@/store/canvasStore";
 import { TutorialCoach } from "@/components/tutorial/TutorialCoach";
@@ -219,27 +219,34 @@ export function AppShell() {
   }, [isMobile]);
 
   const handleStartTutorial = useCallback((problemId: string) => {
-    const tutorial = TUTORIAL_BY_PROBLEM_ID.get(problemId);
-    if (!tutorial) return;
-    const tabId = `tutorial-${problemId}`;
-    const canvas = useCanvasStore.getState();
-    if (canvas.tabs.some((tab) => tab.id === tabId)) {
-      canvas.switchTab(tabId);
-    } else {
-      useTutorialStore.getState().reset(problemId);
-      const problem = PROBLEMS.find((item) => item.id === problemId);
-      useCanvasStore.getState().addTab({
-        id: tabId,
-        label: `${problem?.title ?? problemId} · Tutorial`,
-        nodes: [],
-        edges: [],
-      });
+    const begin = () => {
+      const tutorial = TUTORIAL_BY_PROBLEM_ID.get(problemId);
+      if (!tutorial) return;
+      const tabId = `tutorial-${problemId}`;
+      const canvas = useCanvasStore.getState();
+      if (canvas.tabs.some((tab) => tab.id === tabId)) {
+        canvas.switchTab(tabId);
+      } else {
+        const problem = PROBLEMS.find((item) => item.id === problemId);
+        useCanvasStore.getState().addTab({
+          id: tabId,
+          label: `${problem?.title ?? problemId} · Tutorial`,
+          nodes: [],
+          edges: [],
+        });
+      }
+      useTutorialStore.getState().start(problemId);
+      useAppStore.getState().setSelectedProblem(problemId);
+      useAppStore.getState().setActiveLeftTab("components");
+      useAppStore.getState().setLeftSidebarOpen(true);
+      if (isMobile) setMobileSidebarOpen(false);
+    };
+
+    if (!areStoresHydrated()) {
+      void rehydrateAllStores().then(begin);
+      return;
     }
-    useTutorialStore.getState().start(problemId);
-    useAppStore.getState().setSelectedProblem(problemId);
-    useAppStore.getState().setActiveLeftTab("components");
-    useAppStore.getState().setLeftSidebarOpen(true);
-    if (isMobile) setMobileSidebarOpen(false);
+    begin();
   }, [isMobile]);
 
   const handleRunTutorialScenario = useCallback((requestsPerSec: number) => {
@@ -460,6 +467,7 @@ export function AppShell() {
             onRunScenario={handleRunTutorialScenario}
             onResetCanvas={handleResetTutorialCanvas}
             onNavigateToTarget={handleNavigateToTutorialTarget}
+            onResumeTutorial={handleStartTutorial}
           />
 
           {/* Desktop inline right panel (hidden on mobile) */}
