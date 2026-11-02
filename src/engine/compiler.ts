@@ -18,7 +18,7 @@ import type {
 import type { CompileResult, DesignDiagnostic } from "@/types/compiler";
 import type { RequestProfile } from "@/types/simulation";
 
-const DATABASE_COMPONENTS = new Set(["sql-db", "nosql-db"]);
+const DATABASE_COMPONENTS = new Set(["sql-db", "nosql-db", "timeseries-db"]);
 const TARGET_TYPES: Partial<Record<EndpointLogicKind, Set<string>>> = {
   "cache-read": new Set(["cache"]),
   "cache-invalidate": new Set(["cache"]),

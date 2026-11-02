@@ -220,6 +220,14 @@ test("blocks database read and write mappings when a referenced column is remove
   assert.ok(diagnosticCodes(result).includes("DB_COLUMN_NOT_FOUND"));
 });
 
+test("accepts time-series databases as App Server read and write targets", () => {
+  const { nodes, edges } = makeDesign();
+  nodes[3].data.componentId = "timeseries-db";
+  nodes[3].data.label = "Metrics DB";
+  const result = compileDesign(nodes, edges);
+  assert.equal(result.ok, true, JSON.stringify(result.diagnostics));
+});
+
 test("blocks App Servers that have no endpoints", () => {
   const { nodes, edges } = makeDesign();
   nodes[1].data.endpoints = [];

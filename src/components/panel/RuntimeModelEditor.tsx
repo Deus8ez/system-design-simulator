@@ -558,7 +558,7 @@ export function RuntimeModelEditor({
                           .filter((targetNode) => {
                             const targetData = targetNode.data as ComponentNodeData;
                             if (step.kind.startsWith("cache-")) return targetData.componentId === "cache";
-                            if (step.kind.startsWith("database-")) return ["sql-db", "nosql-db"].includes(targetData.componentId);
+                            if (step.kind.startsWith("database-")) return ["sql-db", "nosql-db", "timeseries-db"].includes(targetData.componentId);
                             if (step.kind === "publish-event") return ["message-queue", "pub-sub"].includes(targetData.componentId);
                             return targetData.category === "compute";
                           })
@@ -693,19 +693,23 @@ export function RuntimeModelEditor({
     );
   }
 
-  if (data.componentId === "sql-db" || data.componentId === "nosql-db") {
+  if (data.componentId === "sql-db" || data.componentId === "nosql-db" || data.componentId === "timeseries-db") {
     const isSqlDatabase = data.componentId === "sql-db";
+    const isTimeSeriesDatabase = data.componentId === "timeseries-db";
+    const usesTables = isSqlDatabase || isTimeSeriesDatabase;
     return (
       <section className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/70 p-3">
         <div className="flex items-center justify-between gap-2">
           <div>
             <h3 className="text-xs font-semibold text-zinc-200">
-              {isSqlDatabase ? "Relational schema" : "Collection schema"}
+              {isSqlDatabase ? "Relational schema" : isTimeSeriesDatabase ? "Time-series schema" : "Collection schema"}
             </h3>
             <p className="mt-0.5 text-[11px] text-zinc-500">
               {isSqlDatabase
                 ? "At 1,000 rows, scans cost 5 work units and indexed reads 1; costs scale with table size and leading index columns."
-                : "Define document fields and lookup indexes for the collection. Indexed reads reduce modeled lookup work as the collection grows."}
+                : isTimeSeriesDatabase
+                  ? "Define measurement fields and time-based lookup indexes for recent telemetry."
+                  : "Define document fields and lookup indexes for the collection. Indexed reads reduce modeled lookup work as the collection grows."}
             </p>
           </div>
           <button
@@ -713,18 +717,18 @@ export function RuntimeModelEditor({
             disabled={disabled}
             onClick={() => saveTables([...tables, {
               id: id("table"),
-              name: `${isSqlDatabase ? "table" : "collection"}_${tables.length + 1}`,
+              name: `${usesTables ? "table" : "collection"}_${tables.length + 1}`,
               estimatedRows: 1000,
               columns: [{ id: id("column"), name: "id", dataType: "UUID", nullable: false, primaryKey: true }],
               indexes: [],
             }])}
             className="inline-flex shrink-0 items-center gap-1 rounded border border-zinc-700 px-2 py-1 text-[11px] text-cyan-400 hover:bg-zinc-800 disabled:opacity-50"
-          ><Plus className="h-3 w-3" /> {isSqlDatabase ? "Add table" : "Add collection"}</button>
+          ><Plus className="h-3 w-3" /> {usesTables ? "Add table" : "Add collection"}</button>
         </div>
 
         {tables.length === 0 && (
           <p className="rounded bg-zinc-800/70 p-2 text-[11px] text-zinc-500">
-            {isSqlDatabase
+            {usesTables
               ? "No tables yet. Add a table and define its access keys."
               : "No collections yet. Add a collection and define its fields and lookup indexes."}
           </p>
