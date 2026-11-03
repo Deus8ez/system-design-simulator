@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -67,8 +67,29 @@ export function SimulationControls({ onSimulate }: SimulationControlsProps) {
   const componentNodes = nodes.filter((node) => node.type !== "text");
   const tutorialHighlight = useTutorialStore((state) => state.highlightTarget);
   const faults = config.faults ?? {};
+  const [requestsPerSecDraft, setRequestsPerSecDraft] = useState(String(config.requestsPerSec));
   const [profilesDraft, setProfilesDraft] = useState(() => JSON.stringify(config.requestProfiles ?? [], null, 2));
   const [profilesError, setProfilesError] = useState(false);
+
+  useEffect(() => {
+    setRequestsPerSecDraft(String(config.requestsPerSec));
+  }, [config.requestsPerSec]);
+
+  const commitRequestsPerSec = () => {
+    const rawValue = requestsPerSecDraft.trim();
+    if (!rawValue) {
+      setRequestsPerSecDraft(String(config.requestsPerSec));
+      return;
+    }
+    const value = Number(rawValue);
+    if (!Number.isFinite(value)) {
+      setRequestsPerSecDraft(String(config.requestsPerSec));
+      return;
+    }
+    const clampedValue = Math.min(MAX_SIMULATION_QPS, Math.max(MIN_SIMULATION_QPS, Math.round(value)));
+    setConfig({ requestsPerSec: clampedValue });
+    setRequestsPerSecDraft(String(clampedValue));
+  };
 
   const updateFault = (nodeId: string, fault: ComponentFault | undefined) => {
     const nextFaults = { ...faults };
@@ -121,13 +142,12 @@ export function SimulationControls({ onSimulate }: SimulationControlsProps) {
               type="number"
               min={MIN_SIMULATION_QPS}
               max={MAX_SIMULATION_QPS}
-              step={100}
-              value={config.requestsPerSec}
-              onChange={(e) => {
-                const rawValue = Number(e.target.value);
-                if (!Number.isFinite(rawValue)) return;
-                const clampedValue = Math.min(MAX_SIMULATION_QPS, Math.max(MIN_SIMULATION_QPS, Math.round(rawValue)));
-                setConfig({ requestsPerSec: clampedValue });
+              step={1}
+              value={requestsPerSecDraft}
+              onChange={(event) => setRequestsPerSecDraft(event.target.value)}
+              onBlur={commitRequestsPerSec}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
               }}
               className="h-7 w-[120px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-right font-mono text-xs text-cyan-500 outline-none transition-colors focus:border-cyan-500"
               aria-label="Requests per second"
