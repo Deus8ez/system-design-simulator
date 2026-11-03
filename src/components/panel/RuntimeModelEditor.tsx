@@ -1251,8 +1251,8 @@ export function RuntimeModelEditor({
             ><Plus className="h-3 w-3" /> Add topic</button>
           </div>
           {queueConfig.topics.map((topic: QueueTopicDefinition, topicIndex) => (
-            <div key={topic.id} className="space-y-1.5">
-            <div className="grid grid-cols-[minmax(0,1fr)_52px_52px_60px_66px_auto] items-center gap-1.5">
+            <div key={topic.id} className="space-y-2 rounded-md border border-zinc-800 bg-zinc-950/40 p-2">
+            <div className="flex min-w-0 items-center gap-1.5">
               <input
                 data-tutorial-target="control:queue-topic-name"
                 data-tutorial-highlight={controlHighlight("queue-topic-name")}
@@ -1266,8 +1266,20 @@ export function RuntimeModelEditor({
                     : item),
                 })}
                 placeholder="topic name"
-                className={`${inputClass(disabled)} min-w-0 font-mono`}
+                className={`${inputClass(disabled)} h-9 min-w-0 flex-1 border-zinc-600 bg-zinc-950 font-mono text-sm font-medium placeholder:text-zinc-500`}
               />
+              <button
+                type="button"
+                disabled={disabled}
+                aria-label="Remove queue topic"
+                onClick={() => saveQueueConfig({
+                  ...queueConfig,
+                  topics: queueConfig.topics.filter((item) => item.id !== topic.id),
+                })}
+                className="shrink-0 rounded p-2 text-zinc-500 hover:bg-zinc-700 hover:text-rose-400 disabled:opacity-50"
+              ><Trash2 className="h-3.5 w-3.5" /></button>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
               <input
                 data-tutorial-target="control:queue-topic-retention"
                 data-tutorial-highlight={controlHighlight("queue-topic-retention")}
@@ -1341,18 +1353,8 @@ export function RuntimeModelEditor({
                 placeholder="bytes"
                 className={`${inputClass(disabled)} text-right`}
               />
-              <button
-                type="button"
-                disabled={disabled}
-                aria-label="Remove queue topic"
-                onClick={() => saveQueueConfig({
-                  ...queueConfig,
-                  topics: queueConfig.topics.filter((item) => item.id !== topic.id),
-                })}
-                className="rounded p-1.5 text-zinc-500 hover:bg-zinc-700 hover:text-rose-400 disabled:opacity-50"
-              ><Trash2 className="h-3.5 w-3.5" /></button>
             </div>
-            <div className="grid grid-cols-3 gap-1.5">
+            <div className="grid grid-cols-2 gap-1.5">
               <input
                 data-tutorial-target="control:queue-topic-failure-rate"
                 data-tutorial-highlight={controlHighlight("queue-topic-failure-rate")}
@@ -1369,7 +1371,7 @@ export function RuntimeModelEditor({
                     ? { ...item, estimatedFailureRatePerAttempt: event.target.value === "" ? undefined : Number(event.target.value) / 100 }
                     : item),
                 })}
-                placeholder="assumed failure %"
+                placeholder="failure %"
                 className={`${inputClass(disabled)} text-right`}
               />
               <input
@@ -1388,7 +1390,7 @@ export function RuntimeModelEditor({
                     ? { ...item, maxDeliveryRetries: event.target.value === "" ? undefined : Number(event.target.value) }
                     : item),
                 })}
-                placeholder="max retries (0–5)"
+                placeholder="retries (0–5)"
                 className={`${inputClass(disabled)} text-right`}
               />
               <input
