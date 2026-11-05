@@ -117,7 +117,11 @@ export function LoadDialog({ open, onClose }: LoadDialogProps) {
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === "string") {
-        importDesign(reader.result);
+        const result = importDesign(reader.result);
+        if (result.ok) {
+          loadDesign(result.id);
+          onClose();
+        }
       }
     };
     reader.readAsText(file);
@@ -149,7 +153,7 @@ export function LoadDialog({ open, onClose }: LoadDialogProps) {
               className="flex items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-400 hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-200"
             >
               <Upload className="h-3 w-3" />
-              Import JSON
+              Import JSON to canvas
             </button>
             <button
               onClick={onClose}

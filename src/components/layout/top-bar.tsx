@@ -12,6 +12,7 @@ import {
   Download,
   ImageIcon,
   FileCode2,
+  FileText,
   FileJson,
   Save,
   FolderOpen,
@@ -35,7 +36,7 @@ import { PROBLEMS } from "@/data/problems";
 import { useCustomProblemsStore } from "@/store/customProblemsStore";
 import { type Node, useReactFlow } from "@xyflow/react";
 import { loadReferenceIntoTab } from "@/lib/loadReference";
-import { exportAsPng, exportAsSvg, exportAsJSON } from "@/lib/exportCanvas";
+import { exportAsPng, exportAsSvg, exportAsJSON, exportAsMarkdown } from "@/lib/exportCanvas";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 
 interface TopBarProps {
@@ -131,6 +132,18 @@ export function TopBar({ onSimulate, onScore, onClearCanvas, onSave, onLoad, onS
     }
     exportAsJSON(nodes, edges, name, strokes);
     useAppStore.getState().showToast("Exported as JSON", "success");
+  }, [currentProblem]);
+
+  const handleExportMarkdown = useCallback(() => {
+    setExportOpen(false);
+    const name = currentProblem?.title ?? "design";
+    const { nodes, edges } = useCanvasStore.getState();
+    if (nodes.length === 0) {
+      useAppStore.getState().showToast("Nothing to export", "info");
+      return;
+    }
+    exportAsMarkdown(nodes, edges, name);
+    useAppStore.getState().showToast("Exported architecture report", "success");
   }, [currentProblem]);
 
   // Keyboard shortcut: Ctrl/Cmd+E → Export as PNG
@@ -391,6 +404,13 @@ export function TopBar({ onSimulate, onScore, onClearCanvas, onSave, onLoad, onS
                   <FileJson className="h-3.5 w-3.5 text-zinc-500" />
                   Export as JSON
                 </button>
+                <button
+                  onClick={() => { setMobileMoreOpen(false); handleExportMarkdown(); }}
+                  className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-xs text-zinc-300 transition-colors hover:bg-zinc-800"
+                >
+                  <FileText className="h-3.5 w-3.5 text-zinc-500" />
+                  Export architecture report
+                </button>
 
                 <div className="my-1 h-px bg-zinc-800" />
 
@@ -482,6 +502,13 @@ export function TopBar({ onSimulate, onScore, onClearCanvas, onSave, onLoad, onS
                 >
                   <FileJson className="h-3.5 w-3.5" />
                   Export as JSON
+                </button>
+                <button
+                  onClick={handleExportMarkdown}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  Export architecture report
                 </button>
               </div>
             </>

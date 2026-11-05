@@ -67,7 +67,21 @@ const penUrl = asDataUrl(`
   export const usePenStore = { getState: () => penState };
 `, "penStore.js");
 const simulationUrl = asDataUrl(`
-  export const simulationState = { resetCount: 0, reset() { this.resetCount += 1; } };
+  export const simulationState = {
+    resetCount: 0,
+    config: {
+      requestsPerSec: 75000,
+      durationSec: 45,
+      rampUp: false,
+      faults: {},
+      requestProfiles: [{ name: "premium", trafficWeight: 1, attributes: { tier: "premium" }, cacheHitRate: 0.8 }],
+    },
+    reset() {
+      this.resetCount += 1;
+      this.config = { requestsPerSec: 10000, durationSec: 10, rampUp: true, faults: {}, requestProfiles: [{ name: "Default", trafficWeight: 1, attributes: {} }] };
+    },
+    setConfig(config) { this.config = { ...this.config, ...config }; },
+  };
   export const useSimulationStore = { getState: () => simulationState };
 `, "simulationStore.js");
 const customProblemsUrl = asDataUrl(
@@ -200,9 +214,11 @@ test("saved-design export/import/load preserves runtime contracts and edge metad
   const saved = useSavedDesignsStore.getState().designs[0];
   const exported = useSavedDesignsStore.getState().exportDesign(saved.id);
   const importResult = useSavedDesignsStore.getState().importDesign(exported);
-  assert.deepEqual(importResult, { ok: true });
+  assert.equal(importResult.ok, true);
 
   const imported = useSavedDesignsStore.getState().designs[0];
+  assert.equal(importResult.id, imported.id);
+  assert.deepEqual(imported.simulationConfig, simulationState.config);
   assert.equal(imported.nodes[0].data.endpoints[0].requestFields[0].name, "lotId");
   assert.equal(imported.nodes[1].data.queueConfig.subscriptions[0].topicName, "parking-events");
   assert.equal(imported.nodes[1].data.queueConfig.topics[0].partitionCount, 8);
@@ -242,4 +258,8 @@ test("saved-design export/import/load preserves runtime contracts and edge metad
   assert.equal(appState.selectedProblemId, "parking-lot");
   assert.equal(penState.strokes.length, 1);
   assert.equal(simulationState.resetCount, 1);
+  assert.equal(simulationState.config.requestsPerSec, 75000);
+  assert.equal(simulationState.config.durationSec, 45);
+  assert.equal(simulationState.config.rampUp, false);
+  assert.equal(simulationState.config.requestProfiles[0].name, "premium");
 });

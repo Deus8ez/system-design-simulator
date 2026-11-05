@@ -12,6 +12,8 @@ import { useCanvasStore } from "@/store/canvasStore";
 import { useAppStore } from "@/store/appStore";
 import { usePenStore, type Stroke } from "@/store/penStore";
 import { serializeNodes, serializeEdges } from "@/store/savedDesignsStore";
+import { useSimulationStore } from "@/store/simulationStore";
+import { buildDesignMarkdown } from "@/lib/designDocument";
 
 function getTimestamp(): string {
   const d = new Date();
@@ -240,6 +242,7 @@ export function exportAsJSON(
       nodes: serializeNodes(nodes),
       edges: serializeEdges(edges),
       strokes,
+      simulationConfig: useSimulationStore.getState().config,
     },
     null,
     2
@@ -247,6 +250,23 @@ export function exportAsJSON(
   const blob = new Blob([payload], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   triggerDownload(url, filename);
+  URL.revokeObjectURL(url);
+}
+
+export function exportAsMarkdown(
+  nodes: Node[],
+  edges: Edge[],
+  problemName: string,
+): void {
+  const document = buildDesignMarkdown(
+    problemName,
+    serializeNodes(nodes),
+    serializeEdges(edges),
+    useSimulationStore.getState().config,
+  );
+  const blob = new Blob([document], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  triggerDownload(url, `${slugify(problemName)}-architecture-${getTimestamp()}.md`);
   URL.revokeObjectURL(url);
 }
 

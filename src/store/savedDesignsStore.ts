@@ -8,6 +8,7 @@ import { useSimulationStore } from "./simulationStore";
 import { useCustomProblemsStore } from "./customProblemsStore";
 import { safeLocalStorage } from "./safeStorage";
 import { PROBLEMS } from "@/data/problems";
+import type { SimulationConfig } from "@/types/simulation";
 import {
   normalizeComponentConfiguration,
   serializeComponentConfiguration,
@@ -55,11 +56,12 @@ export interface SavedDesign {
   edges: SerializedEdge[];
   annotations: string[];
   strokes: Stroke[];
+  simulationConfig?: SimulationConfig;
   createdAt: string;
   updatedAt: string;
 }
 
-export type ImportResult = { ok: true } | { ok: false; error: string };
+export type ImportResult = { ok: true; id: string } | { ok: false; error: string };
 
 interface SavedDesignsState {
   designs: SavedDesign[];
@@ -155,6 +157,7 @@ function normalizeImportedDesign(parsed: unknown):
       nodes: SerializedNode[];
       edges: SerializedEdge[];
       strokes: Stroke[];
+      simulationConfig?: SimulationConfig;
     }
   | { ok: false; error: string } {
   if (!isRecord(parsed)) {
@@ -283,6 +286,78 @@ function normalizeImportedDesign(parsed: unknown):
       })
     : [];
 
+  let simulationConfig: SimulationConfig | undefined;
+  if (parsed.simulationConfig !== undefined) {
+    if (!isRecord(parsed.simulationConfig)) {
+      return { ok: false, error: "Invalid simulationConfig object" };
+    }
+    const config = parsed.simulationConfig;
+    if (
+      typeof config.requestsPerSec !== "number" || !Number.isFinite(config.requestsPerSec) || config.requestsPerSec <= 0 ||
+      typeof config.durationSec !== "number" || !Number.isFinite(config.durationSec) || config.durationSec <= 0 ||
+      typeof config.rampUp !== "boolean" || !isRecord(config.faults) || !Array.isArray(config.requestProfiles) ||
+      config.requestProfiles.length === 0
+    ) {
+      return { ok: false, error: "Invalid simulationConfig values" };
+    }
+    const faults: SimulationConfig["faults"] = {};
+    for (const [nodeId, rawFault] of Object.entries(config.faults)) {
+      if (!nodeIds.has(nodeId) || !isRecord(rawFault)) {
+        return { ok: false, error: `Invalid simulation fault for node "${nodeId}"` };
+      }
+      if (rawFault.mode === "down") {
+        faults[nodeId] = { mode: "down" };
+      } else if (
+        rawFault.mode === "degraded" &&
+        typeof rawFault.capacityFactor === "number" && Number.isFinite(rawFault.capacityFactor) && rawFault.capacityFactor > 0 && rawFault.capacityFactor <= 1 &&
+        typeof rawFault.latencyMultiplier === "number" && Number.isFinite(rawFault.latencyMultiplier) && rawFault.latencyMultiplier >= 1
+      ) {
+        faults[nodeId] = {
+          mode: "degraded",
+          capacityFactor: rawFault.capacityFactor,
+          latencyMultiplier: rawFault.latencyMultiplier,
+        };
+      } else {
+        return { ok: false, error: `Invalid simulation fault for node "${nodeId}"` };
+      }
+    }
+    const requestProfiles: SimulationConfig["requestProfiles"] = [];
+    for (const [index, rawProfile] of config.requestProfiles.entries()) {
+      if (!isRecord(rawProfile) || !isRecord(rawProfile.attributes)) {
+        return { ok: false, error: `Invalid request profile ${index + 1}` };
+      }
+      const { name, trafficWeight, attributes, cacheHitRate } = rawProfile;
+      if (
+        typeof trafficWeight !== "number" || !Number.isFinite(trafficWeight) || trafficWeight < 0 ||
+        Object.values(attributes).some((value) =>
+          !["string", "number", "boolean"].includes(typeof value) ||
+          (typeof value === "number" && !Number.isFinite(value))
+        ) ||
+        (cacheHitRate !== undefined && (
+          typeof cacheHitRate !== "number" || !Number.isFinite(cacheHitRate) || cacheHitRate < 0 || cacheHitRate > 1
+        ))
+      ) {
+        return { ok: false, error: `Invalid request profile ${index + 1}` };
+      }
+      requestProfiles.push({
+        name: str(name, `Profile ${index + 1}`),
+        trafficWeight,
+        attributes: attributes as SimulationConfig["requestProfiles"][number]["attributes"],
+        ...(typeof cacheHitRate === "number" ? { cacheHitRate } : {}),
+      });
+    }
+    if (requestProfiles.every((profile) => profile.trafficWeight === 0)) {
+      return { ok: false, error: "At least one request profile must have positive traffic weight" };
+    }
+    simulationConfig = {
+      requestsPerSec: config.requestsPerSec,
+      durationSec: config.durationSec,
+      rampUp: config.rampUp,
+      faults,
+      requestProfiles,
+    };
+  }
+
   return {
     ok: true,
     name: str(parsed.name, "Untitled design"),
@@ -290,6 +365,7 @@ function normalizeImportedDesign(parsed: unknown):
     nodes,
     edges,
     strokes,
+    simulationConfig,
   };
 }
 
@@ -313,6 +389,7 @@ export const useSavedDesignsStore = create<SavedDesignsState>()(
           edges: serializeEdges(edges),
           annotations: [],
           strokes,
+          simulationConfig: useSimulationStore.getState().config,
           createdAt: now,
           updatedAt: now,
         };
@@ -371,6 +448,9 @@ export const useSavedDesignsStore = create<SavedDesignsState>()(
 
         // Stale simulation metrics/score refer to the previous canvas.
         useSimulationStore.getState().reset();
+        if (design.simulationConfig) {
+          useSimulationStore.getState().setConfig(design.simulationConfig);
+        }
 
         usePenStore.getState().setStrokes(design.strokes ?? []);
 
@@ -428,13 +508,14 @@ export const useSavedDesignsStore = create<SavedDesignsState>()(
           edges: result.edges,
           annotations: [],
           strokes: result.strokes,
+          simulationConfig: result.simulationConfig,
           createdAt: now,
           updatedAt: now,
         };
 
         set((s) => ({ designs: [design, ...s.designs] }));
         useAppStore.getState().showToast("Design imported", "success");
-        return { ok: true };
+        return { ok: true, id: design.id };
       },
     }),
     {
