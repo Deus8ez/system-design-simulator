@@ -43,6 +43,8 @@ export type EndpointLogicKind =
 export interface EndpointLogicStep {
   id: string;
   kind: EndpointLogicKind;
+  /** Steps are enabled by default so existing designs keep their behavior. */
+  enabled?: boolean;
   /** Canvas node ID for the downstream component that performs this operation. */
   targetNodeId?: string;
   target?: string;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Plus, Power, Trash2 } from "lucide-react";
 import { useCanvasStore, type ComponentNodeData } from "@/store/canvasStore";
 import { useTutorialStore } from "@/store/tutorialStore";
 import type {
@@ -505,7 +505,7 @@ export function RuntimeModelEditor({
 
             <div className="space-y-1.5">
               {endpoint.steps.map((step, stepIndex) => (
-                <div key={step.id} className="relative ml-2 border-l border-cyan-700/50 pb-1 pl-2.5 last:border-l-transparent">
+                <div key={step.id} className={`relative ml-2 border-l border-cyan-700/50 pb-1 pl-2.5 last:border-l-transparent ${step.enabled === false ? "opacity-60" : ""}`}>
                   <span className="absolute -left-[4px] top-2 h-1.5 w-1.5 rounded-full bg-cyan-500" />
                   <div className="flex gap-1.5">
                     <select
@@ -525,6 +525,20 @@ export function RuntimeModelEditor({
                     >
                       {LOGIC_STEPS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                     </select>
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      aria-pressed={step.enabled !== false}
+                      aria-label={step.enabled === false ? "Enable pipeline step" : "Disable pipeline step"}
+                      title={step.enabled === false ? "Enable step" : "Disable step"}
+                      onClick={() => saveEndpoints(updateEndpoint(endpoints, endpoint.id, (current) => ({
+                        ...current,
+                        steps: current.steps.map((item) => item.id === step.id
+                          ? { ...item, enabled: item.enabled === false }
+                          : item),
+                      })))}
+                      className={`rounded px-1.5 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 ${step.enabled === false ? "text-zinc-500" : "text-emerald-400"}`}
+                    ><Power className="h-3 w-3" /></button>
                     <button
                       data-tutorial-target={`control:endpoint-step-up-${endpointIndex}-${stepIndex}`}
                       data-tutorial-highlight={tutorialHighlight?.kind === "control" && tutorialHighlight.id === `endpoint-step-up-${endpointIndex}-${stepIndex}` && tutorialHighlight.componentId === data.componentId ? "true" : undefined}

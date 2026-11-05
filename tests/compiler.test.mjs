@@ -244,6 +244,22 @@ test("blocks malformed endpoint conditions", () => {
   assert.ok(diagnosticCodes(result).includes("ENDPOINT_CONDITION_INVALID"));
 });
 
+test("disabled endpoint steps are ignored by validation but do not satisfy response requirements", () => {
+  const { nodes, edges } = makeDesign();
+  nodes[1].data.endpoints[0].steps.push({
+    id: "disabled-invalid-step",
+    kind: "validate",
+    condition: "userId ==",
+    enabled: false,
+  });
+  assert.equal(compileDesign(nodes, edges).ok, true);
+
+  nodes[1].data.endpoints[0].steps.find(({ id }) => id === "get-response").enabled = false;
+  const result = compileDesign(nodes, edges);
+  assert.equal(result.ok, false);
+  assert.ok(diagnosticCodes(result).includes("ENDPOINT_RESPONSE_REQUIRED"));
+});
+
 test("accepts condition identifiers declared in the endpoint request contract", () => {
   const { nodes, edges } = makeDesign();
   nodes[1].data.endpoints[0].requestFields = [

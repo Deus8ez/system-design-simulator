@@ -23,7 +23,7 @@ test("component runtime configuration survives serialize and import normalizatio
       requestFields: [{ id: "item-id-request", name: "id", type: "string", location: "path" }],
       responseFields: [{ id: "item-title-response", name: "title", type: "string" }],
       steps: [
-        { id: "cache-step", kind: "cache-read", targetNodeId: "cache-1", target: "item:{id}", cacheHitRate: 0.8 },
+        { id: "cache-step", kind: "cache-read", targetNodeId: "cache-1", target: "item:{id}", cacheHitRate: 0.8, enabled: false },
         { id: "reply-step", kind: "respond" },
       ],
     }],
@@ -89,6 +89,26 @@ test("legacy components without runtime configuration remain importable with leg
   assert.equal(imported.queueConfig, undefined);
   assert.equal(imported.queueDeliveryMode, "broadcast");
   assert.equal(imported.rateLimiterConfig, undefined);
+});
+
+test("logic step enabled state round-trips and legacy steps default to active", () => {
+  const imported = normalizeComponentConfiguration({
+    endpoints: [{
+      id: "endpoint",
+      method: "GET",
+      path: "/items",
+      steps: [
+        { id: "disabled", kind: "cache-read", enabled: false },
+        { id: "legacy", kind: "respond" },
+      ],
+    }],
+  });
+  assert.equal(imported.endpoints[0].steps[0].enabled, false);
+  assert.equal(imported.endpoints[0].steps[1].enabled, undefined);
+  assert.equal(
+    normalizeComponentConfiguration(serializeComponentConfiguration(imported)).endpoints[0].steps[0].enabled,
+    false,
+  );
 });
 
 test("import normalization preserves invalid gateway route method for compiler diagnostics", () => {

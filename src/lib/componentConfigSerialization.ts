@@ -63,6 +63,7 @@ function normalizeEndpoints(raw: unknown): EndpointDefinition[] | undefined {
       return [{
         id: str(step.id, `step-${endpointIndex}-${stepIndex}`),
         kind: step.kind as EndpointLogicKind,
+        enabled: typeof step.enabled === "boolean" ? step.enabled : undefined,
         targetNodeId: typeof step.targetNodeId === "string" ? step.targetNodeId : undefined,
         target: typeof step.target === "string" ? step.target : undefined,
         condition: typeof step.condition === "string" ? step.condition : undefined,

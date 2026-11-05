@@ -184,6 +184,7 @@ function validateEndpointFields(
   // schema is provided, conditions may only reference declared request fields.
   if (!requestFieldsDeclared) return;
   for (const step of endpoint.steps) {
+    if (step.enabled === false) continue;
     if ((step.kind !== "validate" && step.kind !== "route") || !step.condition?.trim() || !isValidCondition(step.condition)) {
       continue;
     }
@@ -1136,7 +1137,8 @@ export function compileDesign(
     for (const endpoint of endpoints) {
       for (const step of Array.isArray(endpoint.steps) ? endpoint.steps : []) {
         if (
-          step.kind !== "publish-event"
+          step.enabled === false
+          || step.kind !== "publish-event"
           || typeof step.targetNodeId !== "string"
           || typeof step.target !== "string"
           || !step.target.trim()
@@ -1248,7 +1250,8 @@ export function compileDesign(
       }
       routeKeys.add(routeKey);
 
-      if (!endpoint.steps.length) {
+      const activeSteps = endpoint.steps.filter((step) => step.enabled !== false);
+      if (!activeSteps.length) {
         report(diagnostics, {
           code: "ENDPOINT_PIPELINE_REQUIRED",
           severity: "error",
@@ -1258,7 +1261,7 @@ export function compileDesign(
           endpointId: endpoint.id,
         });
       }
-      if (!endpoint.steps.some((step) => step.kind === "respond")) {
+      if (!activeSteps.some((step) => step.kind === "respond")) {
         report(diagnostics, {
           code: "ENDPOINT_RESPONSE_REQUIRED",
           severity: "error",
@@ -1283,6 +1286,7 @@ export function compileDesign(
           });
         }
         stepIds.add(step.id);
+        if (step.enabled === false) return;
         validateStep(app, endpoint, step, index, nodesById, outgoing.get(app.id) ?? new Set(), diagnostics);
       });
     }

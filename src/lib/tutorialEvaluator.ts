@@ -145,6 +145,7 @@ export function evaluateTutorialObjective(
         }
         for (const requiredStep of contract.steps) {
           const operation = endpoint.steps.find((step) => {
+            if (step.enabled === false) return false;
             if (step.kind !== requiredStep.kind) return false;
             if (requiredStep.target !== undefined && step.target !== requiredStep.target) return false;
             if (requiredStep.targetComponentId !== undefined) {
@@ -280,7 +281,7 @@ export function evaluateTutorialObjective(
         componentNodes(nodes, objective.serviceComponentId).some((service) =>
           (service.data.endpoints ?? []).some((endpoint) =>
             endpoint.method === method && endpoint.path === path &&
-            endpoint.steps.some((step) => step.kind === kind && cacheIds.has(step.targetNodeId ?? "")),
+            endpoint.steps.some((step) => step.enabled !== false && step.kind === kind && cacheIds.has(step.targetNodeId ?? "")),
           ),
         );
       if (!serviceHasStep(objective.readEndpoint.method, objective.readEndpoint.path, "cache-read")) {
@@ -406,6 +407,7 @@ export function evaluateTutorialObjective(
             (service.data.endpoints ?? []).some((endpoint) =>
               (!objective.producerEndpoint || (endpoint.method === objective.producerEndpoint.method && endpoint.path === objective.producerEndpoint.path)) &&
               endpoint.steps.some((step) =>
+                step.enabled !== false &&
                 step.kind === "publish-event" && step.target === objective.topicName &&
                 componentByNodeId(nodes, step.targetNodeId)?.id === queue.id,
               ),

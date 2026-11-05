@@ -573,13 +573,16 @@ export function runSimulation(
     const configuredEndpoints = nodeComponentId === "app-server" && Array.isArray(endpoints)
       ? endpoints
       : [];
+    const activeStepsByEndpoint = new Map(
+      configuredEndpoints.map((endpoint) => [endpoint.id, endpoint.steps.filter((step) => step.enabled !== false)])
+    );
 
     // When endpoint steps target connected nodes, they define the request flow
     // for this app server instead of the generic graph fan-out. Endpoint weights
     // are normalized, and a cache-read reduces later database-read traffic by
     // the configured hit rate while still sending every lookup to the cache.
     const hasModeledEndpointBehavior = configuredEndpoints.some((endpoint) =>
-      endpoint.steps.some((step) =>
+      activeStepsByEndpoint.get(endpoint.id)?.some((step) =>
         step.kind === "validate" || Boolean(step.targetNodeId && children.includes(step.targetNodeId))
       )
     );
@@ -598,7 +601,8 @@ export function runSimulation(
       configuredEndpoints.forEach((endpoint, endpointIndex) => {
         const weight = totalWeight > 0 ? weights[endpointIndex] : 1;
         const endpointQPS = output * weight / effectiveTotalWeight;
-        const hasTargetedSteps = endpoint.steps.some(
+        const activeSteps = activeStepsByEndpoint.get(endpoint.id) ?? [];
+        const hasTargetedSteps = activeSteps.some(
           (step) => Boolean(step.targetNodeId && children.includes(step.targetNodeId))
         );
         let unmatchedRouteQPS = 0;
@@ -609,7 +613,7 @@ export function runSimulation(
           let remainingReadFraction = 1;
           let remainingRouteQPS = profileQPS;
 
-          for (const step of endpoint.steps) {
+          for (const step of activeSteps) {
             if (step.kind === "validate") {
               if (!step.condition?.trim()) continue;
               const conditionResult = evaluateEndpointCondition(step.condition, profile.attributes);
@@ -740,7 +744,7 @@ export function runSimulation(
           }
         }
 
-        const hasConfiguredRoutes = endpoint.steps.some(
+        const hasConfiguredRoutes = activeSteps.some(
           (step) => step.kind === "route" && step.targetNodeId && children.includes(step.targetNodeId)
         );
         if (hasConfiguredRoutes && unmatchedRouteQPS > 0.01) {

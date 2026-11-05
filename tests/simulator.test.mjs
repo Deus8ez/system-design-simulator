@@ -213,6 +213,15 @@ test("request profiles without a cache override keep the endpoint cache hit rate
   assert.equal(result.nodeMetrics.get("db").incomingQPS, 250);
 });
 
+test("disabled endpoint steps are retained but do not contribute simulated traffic", () => {
+  const { nodes, edges } = makeCacheReadDesign(0.5);
+  nodes[0].data.endpoints[0].steps[0].enabled = false;
+  const result = runSimulation(nodes, edges, 1000);
+
+  assert.equal(result.nodeMetrics.get("cache").incomingQPS, 0);
+  assert.equal(result.nodeMetrics.get("db").incomingQPS, 1000);
+});
+
 test("request profiles and cache steps without a rate retain the existing default", () => {
   const { nodes, edges } = makeCacheReadDesign(undefined);
   const result = runSimulation(nodes, edges, 1000, {}, 10, [
