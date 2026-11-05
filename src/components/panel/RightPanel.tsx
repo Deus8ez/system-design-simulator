@@ -109,7 +109,7 @@ export function RightPanel({ open = true, onSimulate, variant = "desktop" }: Rig
   return (
     <aside
       className={`hidden shrink-0 flex-col border-l border-zinc-800 bg-zinc-900 overflow-hidden transition-all duration-200 md:flex ${
-        open ? "w-[300px] opacity-100" : "w-0 opacity-0 border-l-0"
+        open ? "w-[clamp(220px,25vw,300px)] opacity-100" : "w-0 opacity-0 border-l-0"
       }`}
       aria-hidden={!open || undefined}
       inert={!open || undefined}
@@ -117,7 +117,7 @@ export function RightPanel({ open = true, onSimulate, variant = "desktop" }: Rig
       {showInterviewPhasePanel ? (
         <InterviewPhasePanel />
       ) : (
-        <div className="flex w-[300px] flex-1 flex-col min-h-0">
+        <div className="flex w-full flex-1 flex-col min-h-0">
           <RightTabs onSimulate={onSimulate} />
         </div>
       )}

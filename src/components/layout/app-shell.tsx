@@ -446,7 +446,7 @@ export function AppShell() {
           onToggleRight={handleToggleRight}
         />
 
-        <div className="relative flex flex-1 overflow-hidden">
+        <div className="relative flex min-w-0 flex-1 overflow-hidden">
           {/* Desktop inline sidebar (hidden on mobile) */}
           <Sidebar
             open={leftSidebarOpen}

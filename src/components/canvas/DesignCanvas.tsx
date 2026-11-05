@@ -167,7 +167,7 @@ export function DesignCanvas({ onPickProblem, onLoadReference, onStartInterview,
   const isEmpty = nodes.length === 0;
 
   return (
-    <div ref={reactFlowWrapper} className="relative flex-1 flex flex-col">
+    <div ref={reactFlowWrapper} className="relative flex min-w-0 flex-1 flex-col">
       <CanvasTabBar />
       <div className="relative flex-1 bg-background">
       <ReactFlow
